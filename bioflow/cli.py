@@ -157,6 +157,7 @@ def cmd_batch(args: argparse.Namespace) -> int:
     pattern = args.pattern
     recursive = args.recursive
     width = args.width
+    workers = args.workers
     continue_on_error = args.continue_on_error
     quiet = args.quiet or args.json
 
@@ -182,6 +183,13 @@ def cmd_batch(args: argparse.Namespace) -> int:
             console_err.print(f"Error: width must be positive (got {width})", style="bold red")
         return EXIT_ARGUMENT_ERROR
 
+    if workers <= 0:
+        if args.json:
+            print(json.dumps({"error": "invalid_workers", "workers": workers}, ensure_ascii=False))
+        else:
+            console_err.print(f"Error: workers must be positive (got {workers})", style="bold red")
+        return EXIT_ARGUMENT_ERROR
+
     try:
         # 执行批量处理
         results = batch_format_sequences(
@@ -192,6 +200,7 @@ def cmd_batch(args: argparse.Namespace) -> int:
             width=width,
             continue_on_error=continue_on_error,
             quiet=quiet,
+            workers=workers,
         )
 
         # 输出结果
@@ -203,6 +212,7 @@ def cmd_batch(args: argparse.Namespace) -> int:
                 "pattern": pattern,
                 "recursive": recursive,
                 "width": width,
+                "workers": workers,
                 "results": {
                     "success": results["success"],
                     "failed": results["failed"],
@@ -479,6 +489,7 @@ def main() -> int:
     parser_batch.add_argument("--pattern", "-p", default="*.fasta", help="File pattern to match (default: *.fasta)")
     parser_batch.add_argument("--recursive", "-r", action="store_true", help="Recursively scan subdirectories")
     parser_batch.add_argument("--width", "-w", type=int, default=80, help="Line width (default: 80)")
+    parser_batch.add_argument("--workers", type=int, default=1, help="Number of worker processes (default: 1)")
     parser_batch.add_argument("--continue-on-error", "-c", action="store_true", help="Continue processing on error")
 
     # align 子命令

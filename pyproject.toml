@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bioflow-cli"
-version = "0.3.1"
+version = "0.4.0"
 description = "A professional bioinformatics TUI workflow tool with i18n support."
 readme = "README.md"
 license = "MIT"

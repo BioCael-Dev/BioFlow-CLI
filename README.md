@@ -26,7 +26,7 @@ License text: [MIT License](LICENSE)
   - FASTA formatting with configurable line width
   - FASTQ formatting with auto-detection and quality summary (Avg Q / Q20 / Q30)
   - Streaming read/write path for large files with lower memory usage
-  - Batch processing with progress tracking and result tables
+  - Batch processing with optional multi-process acceleration, progress tracking, and result tables
 - **Sequence Alignment**:
   - BWA index + BWA mem + SAMtools sort/index + `samtools flagstat`
   - Mapping statistics summary for terminal workflows
@@ -85,6 +85,9 @@ bioflow batch --input-dir ./data --output-dir ./formatted --pattern "*.fasta" --
 # Batch format with recursive scan
 bioflow batch -i ./data -o ./formatted -p "*.fastq" -r -w 60
 
+# Batch format with 4 worker processes
+bioflow batch -i ./data -o ./formatted -p "*.fastq" -r --workers 4
+
 # Run QC pipeline
 bioflow qc --input reads.fastq --output qc_results/ --adapter adapters.fa --minlen 36
 
@@ -118,6 +121,12 @@ bioflow --json batch -i ./data -o ./formatted
 - `stdout`: normal result data (including JSON)
 - `stderr`: progress, warnings, and errors
 
+### Batch Concurrency
+
+- `bioflow batch --workers N` enables multi-process batch formatting
+- default `--workers` value is `1`
+- use a larger worker count for large batch jobs on multi-core machines
+
 ## Configuration
 
 Language config is saved per OS:
@@ -131,12 +140,12 @@ Language config is saved per OS:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e .
 ```
 
 ## Project Status
 
-Current development version: **v0.3.1**
+Current development version: **v0.4.0**
 
 Release history and notes: [GitHub Releases](https://github.com/BioCael-Dev/BioFlow-CLI/releases)
 

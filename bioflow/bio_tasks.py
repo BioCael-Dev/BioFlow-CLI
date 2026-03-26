@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import re
 import tempfile
 import time
 from collections.abc import Iterator
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
+from contextlib import nullcontext
 from pathlib import Path
 from typing import TextIO
 
@@ -451,6 +454,76 @@ def _process_single_file(
     return seq_format, count
 
 
+def _run_batch_job(
+    index: int,
+    file_path_str: str,
+    output_path_str: str,
+    width: int,
+) -> dict[str, int | float | str]:
+    """子进程/主进程通用的单文件批处理任务。"""
+    start_time = time.time()
+    file_path = Path(file_path_str)
+    output_path = Path(output_path_str)
+
+    try:
+        _seq_format, count = _process_single_file(file_path, output_path, width)
+        return {
+            "index": index,
+            "kind": "success",
+            "file": file_path.name,
+            "sequences": count,
+            "output": output_path.name,
+            "time": time.time() - start_time,
+        }
+    except ValueError as exc:
+        reason = str(exc)
+        if reason == "unsupported_format":
+            return {
+                "index": index,
+                "kind": "skipped",
+                "file": file_path.name,
+                "reason": "unsupported_format",
+                "time": 0.0,
+            }
+        return {
+            "index": index,
+            "kind": "failed",
+            "file": file_path.name,
+            "error": reason,
+            "time": time.time() - start_time,
+        }
+    except Exception as exc:
+        return {
+            "index": index,
+            "kind": "failed",
+            "file": file_path.name,
+            "error": str(exc),
+            "time": time.time() - start_time,
+        }
+
+
+def _append_batch_result(results: dict[str, list[dict]], item: dict[str, int | float | str]) -> None:
+    """将单文件结果写入聚合结构。"""
+    kind = item.pop("kind")
+    item.pop("index", None)
+    if kind == "success":
+        results["success"].append(item)
+    elif kind == "skipped":
+        results["skipped"].append(item)
+    else:
+        results["failed"].append(item)
+
+
+def _normalize_workers(workers: int | None) -> int:
+    """规范化并发数，非法值回退到 1。"""
+    if workers is None:
+        return 1
+    try:
+        return max(1, int(workers))
+    except (TypeError, ValueError):
+        return 1
+
+
 def batch_format_sequences(
     input_dir: Path,
     output_dir: Path,
@@ -459,6 +532,7 @@ def batch_format_sequences(
     width: int = 80,
     continue_on_error: bool = True,
     quiet: bool = False,
+    workers: int = 1,
 ) -> dict[str, list[dict]]:
     """批量格式化序列文件。
 
@@ -470,6 +544,7 @@ def batch_format_sequences(
         width: 序列换行宽度
         continue_on_error: 遇到错误是否继续处理
         quiet: 静默模式（不显示进度）
+        workers: 并发进程数，1 表示串行处理
 
     Returns:
         包含 success/failed/skipped 列表的字典
@@ -493,73 +568,113 @@ def batch_format_sequences(
     output_dir.mkdir(parents=True, exist_ok=True)
     seen_names: set[str] = set()
 
-    def _handle_file(file_path: Path) -> bool:
-        """处理单个文件，返回 False 表示应中断循环。"""
-        start_time = time.time()
+    workers = _normalize_workers(workers)
+    jobs: list[dict[str, int | str]] = []
+    skipped_items: list[dict[str, int | float | str]] = []
+    for index, file_path in enumerate(files):
         if not file_path.is_file():
-            results["skipped"].append({
+            skipped_items.append({
+                "index": index,
+                "kind": "skipped",
                 "file": file_path.name,
                 "reason": "unsupported_format",
                 "time": 0.0,
             })
-            return True
-        try:
-            out_path = _make_unique_output_path(
-                file_path, input_dir, output_dir, recursive, seen_names
-            )
-            _seq_format, count = _process_single_file(file_path, out_path, width)
-            results["success"].append({
-                "file": file_path.name,
-                "sequences": count,
-                "output": out_path.name,
-                "time": time.time() - start_time,
-            })
-        except ValueError as ve:
-            reason = str(ve)
-            if reason == "unsupported_format":
-                results["skipped"].append({
-                    "file": file_path.name,
-                    "reason": "unsupported_format",
-                    "time": 0.0,
-                })
-            else:
-                results["failed"].append({
-                    "file": file_path.name,
-                    "error": reason,
-                    "time": time.time() - start_time,
-                })
-                if not continue_on_error:
-                    return False
-        except Exception as e:
-            results["failed"].append({
-                "file": file_path.name,
-                "error": str(e),
-                "time": time.time() - start_time,
-            })
-            if not continue_on_error:
-                return False
-        return True
+            continue
+        out_path = _make_unique_output_path(
+            file_path, input_dir, output_dir, recursive, seen_names
+        )
+        jobs.append({
+            "index": index,
+            "file_path": str(file_path),
+            "output_path": str(out_path),
+        })
 
-    # 批量处理
+    completed_items: list[dict[str, int | float | str]] = []
+    completed_items.extend(skipped_items)
+
+    progress_cm: Progress | None = None
     if not quiet:
-        with Progress(
+        progress_cm = Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TimeElapsedColumn(),
             console=console,
-        ) as progress:
-            task = progress.add_task(t("batch_processing"), total=len(files))
-            for file_path in files:
-                should_continue = _handle_file(file_path)
-                progress.advance(task)
-                if not should_continue:
+        )
+
+    with progress_cm or nullcontext() as progress:
+        task_id = None
+        if progress is not None:
+            task_id = progress.add_task(t("batch_processing"), total=len(files))
+            if skipped_items:
+                progress.advance(task_id, advance=len(skipped_items))
+
+        if workers == 1 or len(jobs) <= 1:
+            for job in jobs:
+                item = _run_batch_job(job["index"], job["file_path"], job["output_path"], width)
+                completed_items.append(item)
+                if progress is not None and task_id is not None:
+                    progress.advance(task_id)
+                if item["kind"] == "failed" and not continue_on_error:
                     break
-    else:
-        for file_path in files:
-            if not _handle_file(file_path):
-                break
+        else:
+            max_workers = min(workers, len(jobs), os.cpu_count() or workers)
+            executor = ProcessPoolExecutor(max_workers=max_workers)
+            try:
+                job_iter = iter(jobs)
+                pending: dict[Future, dict[str, int | str]] = {}
+
+                for _ in range(max_workers):
+                    try:
+                        job = next(job_iter)
+                    except StopIteration:
+                        break
+                    future = executor.submit(
+                        _run_batch_job,
+                        job["index"],
+                        job["file_path"],
+                        job["output_path"],
+                        width,
+                    )
+                    pending[future] = job
+
+                stop_early = False
+                while pending:
+                    done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        pending.pop(future, None)
+                        item = future.result()
+                        completed_items.append(item)
+                        if progress is not None and task_id is not None:
+                            progress.advance(task_id)
+                        if item["kind"] == "failed" and not continue_on_error:
+                            stop_early = True
+                            break
+
+                        try:
+                            job = next(job_iter)
+                        except StopIteration:
+                            continue
+                        new_future = executor.submit(
+                            _run_batch_job,
+                            job["index"],
+                            job["file_path"],
+                            job["output_path"],
+                            width,
+                        )
+                        pending[new_future] = job
+
+                    if stop_early:
+                        for future in pending:
+                            future.cancel()
+                        break
+            finally:
+                executor.shutdown(wait=True, cancel_futures=True)
+
+    for item in sorted(completed_items, key=lambda entry: int(entry["index"])):
+        _append_batch_result(results, item)
 
     return results
 

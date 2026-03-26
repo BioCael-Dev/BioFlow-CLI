@@ -25,10 +25,9 @@ BioFlow-CLI 是一个基于 **MIT 许可证** 发布的 **开源项目**。
 - **国际化支持** — 完整的中英文本地化；首次运行时选择语言，偏好保存至用户配置目录
 - **环境管理器** — 一键检测和安装常用生物工具（FastQC、SAMtools、BWA、BLAST+、Trimmomatic），通过 Conda 管理
 - **序列格式化** — 标准化 FASTA/FASTQ 文件，支持自定义行宽，并使用流式读写降低大文件内存占用
-- **批量处理** — 支持目录递归扫描、多文件并行逻辑处理、进度跟踪及统计表格
+- **批量处理** — 支持目录递归扫描、多进程加速、多文件处理、进度跟踪及统计表格
 - **序列比对** — 集成 BWA + SAMtools 完整流程，支持建索引、比对、排序、BAM 索引与比对统计
 - **QC 流程** — 集成 FastQC + Trimmomatic 的质量控制流水线
-- **模块化设计** — 职责清晰分离，易于扩展
 
 ## 快速开始
 
@@ -126,6 +125,9 @@ bioflow batch --input-dir ./data --output-dir ./formatted --pattern "*.fasta" --
 # 带递归扫描的批量处理
 bioflow batch -i ./data -o ./formatted -p "*.fastq" -r -w 60
 
+# 使用 4 个工作进程加速批量处理
+bioflow batch -i ./data -o ./formatted -p "*.fastq" -r --workers 4
+
 # 运行 QC 流程
 bioflow qc --input reads.fastq --output qc_results/ --adapter adapters.fa --minlen 36
 
@@ -157,6 +159,12 @@ bioflow --json batch -i ./data -o ./formatted
 - **stdout**：结果数据和 JSON 输出（用于管道传输）
 - **stderr**：进度消息、警告和错误信息
 
+#### 批量并发
+
+- `bioflow batch --workers N` 可启用多进程批量格式化
+- 默认值为 `1`
+- 在多核机器上处理大量文件时可适当提高并发数
+
 ### 配置文件位置
 
 | 操作系统 | 路径 |
@@ -170,12 +178,12 @@ bioflow --json batch -i ./data -o ./formatted
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e .
 ```
 
 ## 项目状态
 
-当前开发版本：**v0.3.1**
+当前开发版本：**v0.4.0**
 
 ## 许可证
 
