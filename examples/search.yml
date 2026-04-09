@@ -1,6 +1,7 @@
 search:
   db: ref.fa
   query: query.fa
+  outdir: runs/search-001
   output: hits.tsv
   evalue: 1e-5
   max_target_seqs: 20

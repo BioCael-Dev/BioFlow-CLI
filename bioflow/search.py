@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -13,6 +14,13 @@ from rich.table import Table
 
 from bioflow.i18n import t
 from bioflow.preflight import preflight_check
+from bioflow.run_layout import (
+    append_log,
+    create_run_layout,
+    resolve_result_path,
+    utc_now_iso,
+    write_metadata,
+)
 
 console = Console()
 
@@ -63,17 +71,24 @@ def _run_cmd(
     *,
     description: str = "",
     quiet: bool = False,
+    stdout_log: Path | None = None,
+    stderr_log: Path | None = None,
 ) -> bool:
     """执行外部命令并返回是否成功。"""
     if description and not quiet:
         console.print(f"  → {description}", style="cyan")
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        append_log(stdout_log, result.stdout)
+        append_log(stderr_log, result.stderr)
         return True
     except subprocess.CalledProcessError as exc:
         stderr_text = exc.stderr or str(exc)
+        append_log(stdout_log, exc.stdout or "")
+        append_log(stderr_log, exc.stderr or "")
         return _print_search_failure(description, stderr_text.strip())
     except FileNotFoundError as exc:
+        append_log(stderr_log, str(exc))
         return _print_search_failure(description, str(exc))
 
 
@@ -87,7 +102,13 @@ def _blast_db_ready(db_fasta: Path) -> bool:
     return all(path.exists() for path in _blast_db_index_files(db_fasta))
 
 
-def _run_makeblastdb(db_fasta: Path, *, quiet: bool = False) -> bool:
+def _run_makeblastdb(
+    db_fasta: Path,
+    *,
+    quiet: bool = False,
+    stdout_log: Path | None = None,
+    stderr_log: Path | None = None,
+) -> bool:
     """构建 BLAST nucleotide 数据库。"""
     return _run_cmd(
         [
@@ -99,6 +120,8 @@ def _run_makeblastdb(db_fasta: Path, *, quiet: bool = False) -> bool:
         ],
         description=t("search_building_db", file=db_fasta.name),
         quiet=quiet,
+        stdout_log=stdout_log,
+        stderr_log=stderr_log,
     )
 
 
@@ -110,6 +133,8 @@ def _run_blastn(
     evalue: float = 10.0,
     max_target_seqs: int = 10,
     quiet: bool = False,
+    stdout_log: Path | None = None,
+    stderr_log: Path | None = None,
 ) -> bool:
     """执行 blastn 检索。"""
     return _run_cmd(
@@ -130,6 +155,8 @@ def _run_blastn(
         ],
         description=t("search_running_blastn", file=query_fasta.name),
         quiet=quiet,
+        stdout_log=stdout_log,
+        stderr_log=stderr_log,
     )
 
 
@@ -242,6 +269,7 @@ def run_blast_search(
     query_fasta: Path,
     *,
     output: Path | None = None,
+    outdir: Path | None = None,
     evalue: float = 10.0,
     max_target_seqs: int = 10,
     top_n: int = 5,
@@ -253,9 +281,18 @@ def run_blast_search(
         if not preflight_check(SEARCH_REQUIRED_TOOLS, cli_mode=cli_mode):
             return None
 
-    if output is None:
-        output = query_fasta.parent / f"{query_fasta.stem}.blast.tsv"
-    output.parent.mkdir(parents=True, exist_ok=True)
+    layout = create_run_layout("search", query_fasta, outdir=outdir)
+    started_at = utc_now_iso()
+    output = resolve_result_path(layout, output, f"{query_fasta.stem}.blast.tsv")
+    write_metadata(
+        layout,
+        status="running",
+        command="search",
+        parameters={"evalue": evalue, "max_target_seqs": max_target_seqs, "top_n": top_n},
+        inputs={"db": str(db_fasta), "query": str(query_fasta)},
+        outputs={"root": str(layout.root), "tsv": str(output)},
+        started_at=started_at,
+    )
 
     quiet = cli_mode
     if not quiet:
@@ -272,7 +309,22 @@ def run_blast_search(
     else:
         if not quiet:
             console.print(t("search_step_makeblastdb"), style="bold blue")
-        if not _run_makeblastdb(db_fasta, quiet=quiet):
+        if not _run_makeblastdb(
+            db_fasta,
+            quiet=quiet,
+            stdout_log=layout.stdout_log,
+            stderr_log=layout.stderr_log,
+        ):
+            write_metadata(
+                layout,
+                status="failed",
+                command="search",
+                parameters={"evalue": evalue, "max_target_seqs": max_target_seqs, "top_n": top_n},
+                inputs={"db": str(db_fasta), "query": str(query_fasta)},
+                outputs={"root": str(layout.root), "tsv": str(output)},
+                started_at=started_at,
+                completed_at=utc_now_iso(),
+            )
             return None
 
     if not quiet:
@@ -284,12 +336,26 @@ def run_blast_search(
         evalue=evalue,
         max_target_seqs=max_target_seqs,
         quiet=quiet,
+        stdout_log=layout.stdout_log,
+        stderr_log=layout.stderr_log,
     ):
+        write_metadata(
+            layout,
+            status="failed",
+            command="search",
+            parameters={"evalue": evalue, "max_target_seqs": max_target_seqs, "top_n": top_n},
+            inputs={"db": str(db_fasta), "query": str(query_fasta)},
+            outputs={"root": str(layout.root), "tsv": str(output)},
+            started_at=started_at,
+            completed_at=utc_now_iso(),
+        )
         return None
 
     hits = parse_blast_tsv(output)
     summary = summarize_blast_hits(hits, top_n=top_n)
     hit_count = int(summary["hit_count"])
+    summary_path = layout.results_dir / "search_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     if not quiet:
         console.print(
             t("search_pipeline_done", output=str(output), hits=hit_count),
@@ -297,10 +363,23 @@ def run_blast_search(
         )
         display_search_summary(summary)
 
+    write_metadata(
+        layout,
+        status="success",
+        command="search",
+        parameters={"evalue": evalue, "max_target_seqs": max_target_seqs, "top_n": top_n},
+        inputs={"db": str(db_fasta), "query": str(query_fasta)},
+        outputs={"root": str(layout.root), "tsv": str(output), "summary": str(summary_path)},
+        started_at=started_at,
+        completed_at=utc_now_iso(),
+        extra={"summary": summary},
+    )
+
     return {
         "db": str(db_fasta),
         "query": str(query_fasta),
         "output": str(output),
+        "outdir": str(layout.root),
         "hits": hit_count,
         "evalue": evalue,
         "max_target_seqs": max_target_seqs,

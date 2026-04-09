@@ -131,20 +131,20 @@ bioflow batch -i ./data -o ./formatted -p "*.fastq" -r -w 60
 # 使用 4 个工作进程加速批量处理
 bioflow batch -i ./data -o ./formatted -p "*.fastq" -r --workers 4
 
-# 运行 QC 流程
-bioflow qc --input reads.fastq --output qc_results/ --adapter adapters.fa --minlen 36
+# 运行 QC 流程，并指定统一运行目录
+bioflow qc --input reads.fastq --outdir runs/qc-001 --adapter adapters.fa --minlen 36
 
 # 从配置文件运行 QC 流程
 bioflow qc --config examples/qc.yml
 
 # 运行序列比对流程
-bioflow align --ref ref.fa --input reads.fastq --output aligned.bam --threads 4
+bioflow align --ref ref.fa --input reads.fastq --outdir runs/align-001 --output aligned.bam --threads 4
 
 # 从配置文件运行序列比对流程
 bioflow align --config examples/align.yml
 
 # 运行 BLAST 核酸检索
-bioflow search --db ref.fa --query query.fa --output hits.tsv --evalue 1e-5 --max-target-seqs 20
+bioflow search --db ref.fa --query query.fa --outdir runs/search-001 --output hits.tsv --evalue 1e-5 --max-target-seqs 20
 
 # 仅展示前 3 个摘要命中
 bioflow search --db ref.fa --query query.fa --output hits.tsv --top 3
@@ -191,6 +191,13 @@ bioflow --json batch -i ./data -o ./formatted
 - 参数优先级为：CLI 显式参数 > YAML 配置 > 内置默认值
 - 示例模板已放在 `examples/`
 
+#### 工作流输出目录规范
+
+- `qc`、`align`、`search` 现在统一使用标准运行目录布局
+- 可通过 `--outdir` 指定运行根目录；未指定时会在输入文件旁自动创建 `qc_run`、`align_run` 或 `search_run`
+- 每次运行都会生成 `logs/`、`results/`、`tmp/` 和 `metadata.json`
+- 若运行失败，诊断日志会保留在 `logs/` 目录中，便于排错
+
 #### 批量并发
 
 - `bioflow batch --workers N` 可启用多进程批量格式化
@@ -215,7 +222,7 @@ pip install -e .
 
 ## 项目状态
 
-当前开发版本：**v0.4.3**
+当前开发版本：**v0.5.0**
 
 ## 许可证
 

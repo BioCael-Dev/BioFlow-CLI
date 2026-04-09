@@ -9,9 +9,9 @@ import yaml
 
 
 WORKFLOW_ALLOWED_KEYS: dict[str, set[str]] = {
-    "qc": {"input", "output", "adapter", "minlen"},
-    "align": {"ref", "input", "output", "threads"},
-    "search": {"db", "query", "output", "evalue", "max_target_seqs", "top"},
+    "qc": {"input", "output", "outdir", "adapter", "minlen"},
+    "align": {"ref", "input", "output", "outdir", "threads"},
+    "search": {"db", "query", "output", "outdir", "evalue", "max_target_seqs", "top"},
 }
 
 

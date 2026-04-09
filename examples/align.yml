@@ -1,5 +1,6 @@
 align:
   ref: ref.fa
   input: reads.fastq
+  outdir: runs/align-001
   output: aligned.sorted.bam
   threads: 4

@@ -63,6 +63,20 @@ def _resolve_config_path(config_value: str | None) -> Path | None:
     return Path(config_value)
 
 
+def _default_workflow_outdir(workflow: str, anchor: Path) -> Path:
+    """返回工作流默认运行目录。"""
+    return anchor.parent / f"{workflow}_run"
+
+
+def _resolve_align_json_output(input_path: Path, output_path: Path | None, outdir: Path | None) -> Path:
+    """返回 align JSON 模式下展示的主输出 BAM 路径。"""
+    if output_path is None:
+        return (outdir or _default_workflow_outdir("align", input_path)) / "results" / f"{input_path.stem}.sorted.bam"
+    if output_path.is_absolute():
+        return output_path
+    return (outdir or _default_workflow_outdir("align", input_path)) / "results" / output_path.name
+
+
 def _merge_workflow_args(
     args: argparse.Namespace,
     workflow: str,
@@ -366,7 +380,7 @@ def cmd_qc(args: argparse.Namespace) -> int:
         params = _merge_workflow_args(
             args,
             "qc",
-            {"input": None, "output": None, "adapter": None, "minlen": 36},
+            {"input": None, "output": None, "outdir": None, "adapter": None, "minlen": 36},
         )
     except ConfigError as exc:
         if args.json:
@@ -392,6 +406,7 @@ def cmd_qc(args: argparse.Namespace) -> int:
         return EXIT_ARGUMENT_ERROR
 
     output_dir = Path(str(params["output"])) if params["output"] else None
+    outdir = Path(str(params["outdir"])) if params["outdir"] else None
     adapter = str(params["adapter"]) if params["adapter"] else None
     minlen = int(params["minlen"])
 
@@ -406,16 +421,20 @@ def cmd_qc(args: argparse.Namespace) -> int:
         success = run_qc_pipeline(
             input_path,
             output_dir=output_dir,
+            outdir=outdir,
             adapter=adapter,
             minlen=minlen,
             cli_mode=True,
         )
         if success:
             if args.json:
+                final_outdir = str(outdir or output_dir or _default_workflow_outdir("qc", input_path))
                 payload = {
                     "status": "success",
                     "input": str(input_path),
-                    "output": str(output_dir or input_path.parent / "qc_output"),
+                    "outdir": final_outdir,
+                    "output": str(Path(final_outdir) / "results"),
+                    "metadata": str(Path(final_outdir) / "metadata.json"),
                 }
                 print(json.dumps(payload, ensure_ascii=False))
             return EXIT_SUCCESS
@@ -440,7 +459,7 @@ def cmd_align(args: argparse.Namespace) -> int:
         params = _merge_workflow_args(
             args,
             "align",
-            {"ref": None, "input": None, "output": None, "threads": 1},
+            {"ref": None, "input": None, "output": None, "outdir": None, "threads": 1},
         )
     except ConfigError as exc:
         if args.json:
@@ -484,12 +503,14 @@ def cmd_align(args: argparse.Namespace) -> int:
         return EXIT_ARGUMENT_ERROR
 
     output_path = Path(str(params["output"])) if params["output"] else None
+    outdir = Path(str(params["outdir"])) if params["outdir"] else None
 
     try:
         stats = run_alignment_pipeline(
             ref_path,
             input_path,
             output=output_path,
+            outdir=outdir,
             threads=threads,
             cli_mode=True,
         )
@@ -499,7 +520,9 @@ def cmd_align(args: argparse.Namespace) -> int:
                     "status": "success",
                     "ref": str(ref_path),
                     "input": str(input_path),
-                    "output": str(output_path or input_path.parent / f"{input_path.stem}.sorted.bam"),
+                    "output": str(_resolve_align_json_output(input_path, output_path, outdir)),
+                    "outdir": str(outdir or _default_workflow_outdir("align", input_path)),
+                    "metadata": str((outdir or _default_workflow_outdir("align", input_path)) / "metadata.json"),
                     "stats": {
                         "total": stats["total"],
                         "mapped": stats["mapped"],
@@ -533,6 +556,7 @@ def cmd_search(args: argparse.Namespace) -> int:
                 "db": None,
                 "query": None,
                 "output": None,
+                "outdir": None,
                 "evalue": 10.0,
                 "max_target_seqs": 10,
                 "top": 5,
@@ -603,12 +627,14 @@ def cmd_search(args: argparse.Namespace) -> int:
         return EXIT_ARGUMENT_ERROR
 
     output_path = Path(str(params["output"])) if params["output"] else None
+    outdir = Path(str(params["outdir"])) if params["outdir"] else None
 
     try:
         result = run_blast_search(
             db_path,
             query_path,
             output=output_path,
+            outdir=outdir,
             evalue=evalue,
             max_target_seqs=max_target_seqs,
             top_n=top_n,
@@ -664,7 +690,8 @@ def main() -> int:
     parser_qc = subparsers.add_parser("qc", help="Run QC pipeline (FastQC + Trimmomatic)")
     parser_qc.add_argument("--config", help="YAML config file for qc workflow")
     parser_qc.add_argument("--input", "-i", help="Input FASTQ file")
-    parser_qc.add_argument("--output", "-o", help="Output directory (default: qc_output/)")
+    parser_qc.add_argument("--output", "-o", help="Legacy run root directory (same effect as --outdir)")
+    parser_qc.add_argument("--outdir", help="Run output root directory (default: input_dir/qc_run)")
     parser_qc.add_argument("--adapter", "-a", help="Adapter file for Trimmomatic")
     parser_qc.add_argument("--minlen", type=int, help="Minimum read length (default: 36)")
 
@@ -683,7 +710,8 @@ def main() -> int:
     parser_align.add_argument("--config", help="YAML config file for alignment workflow")
     parser_align.add_argument("--ref", "-r", help="Reference genome FASTA file")
     parser_align.add_argument("--input", "-i", help="Input reads file (FASTQ)")
-    parser_align.add_argument("--output", "-o", help="Output BAM file (default: input.sorted.bam)")
+    parser_align.add_argument("--output", "-o", help="Output BAM file written under results/ unless absolute path is given")
+    parser_align.add_argument("--outdir", help="Run output root directory (default: input_dir/align_run)")
     parser_align.add_argument("--threads", "-t", type=int, help="Number of threads (default: 1)")
 
     # search 子命令
@@ -691,7 +719,8 @@ def main() -> int:
     parser_search.add_argument("--config", help="YAML config file for search workflow")
     parser_search.add_argument("--db", help="Reference database FASTA file")
     parser_search.add_argument("--query", "-q", help="Query FASTA file")
-    parser_search.add_argument("--output", "-o", help="Output TSV file (default: query.blast.tsv)")
+    parser_search.add_argument("--output", "-o", help="Output TSV file written under results/ unless absolute path is given")
+    parser_search.add_argument("--outdir", help="Run output root directory (default: query_dir/search_run)")
     parser_search.add_argument("--evalue", type=float, help="E-value threshold (default: 10.0)")
     parser_search.add_argument(
         "--max-target-seqs",

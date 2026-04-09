@@ -106,7 +106,7 @@ STRINGS = {
     "menu_qc": "[QC] Quality Control Pipeline",
     "qc_title": "Quality Control Pipeline",
     "qc_input_prompt": "Enter the path to your FASTQ file:",
-    "qc_output_prompt": "Enter the output directory:",
+    "qc_output_prompt": "Enter the run output directory:",
     "qc_adapter_prompt": "Adapter file path (leave empty to skip):",
     "qc_minlen_prompt": "Minimum read length (default 36):",
     "qc_pipeline_start": "Starting QC pipeline for: {file}",

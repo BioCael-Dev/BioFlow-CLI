@@ -15,6 +15,13 @@ from rich.table import Table
 
 from bioflow.i18n import t
 from bioflow.preflight import preflight_check
+from bioflow.run_layout import (
+    append_log,
+    create_run_layout,
+    resolve_result_path,
+    utc_now_iso,
+    write_metadata,
+)
 
 console = Console()
 
@@ -36,6 +43,8 @@ def _run_cmd(
     *,
     description: str = "",
     capture: bool = False,
+    stdout_log: Path | None = None,
+    stderr_log: Path | None = None,
 ) -> subprocess.CompletedProcess | None:
     """执行外部命令，失败时打印错误并返回 None。"""
     if description:
@@ -47,21 +56,28 @@ def _run_cmd(
             capture_output=capture,
             text=True,
         )
+        append_log(stdout_log, result.stdout or "")
+        append_log(stderr_log, result.stderr or "")
         return result
     except subprocess.CalledProcessError as exc:
         stderr_text = exc.stderr or str(exc)
+        append_log(stdout_log, exc.stdout or "")
+        append_log(stderr_log, exc.stderr or "")
         _print_alignment_failure(description, stderr_text.strip())
         return None
     except FileNotFoundError as exc:
+        append_log(stderr_log, str(exc))
         _print_alignment_failure(description, str(exc))
         return None
 
 
-def _run_bwa_index(ref: Path) -> bool:
+def _run_bwa_index(ref: Path, *, stdout_log: Path | None = None, stderr_log: Path | None = None) -> bool:
     """构建 BWA 索引。"""
     result = _run_cmd(
         ["bwa", "index", str(ref)],
         description=t("align_indexing", file=ref.name),
+        stdout_log=stdout_log,
+        stderr_log=stderr_log,
     )
     return result is not None
 
@@ -72,6 +88,8 @@ def _run_bwa_mem_pipe_sort(
     output_bam: Path,
     *,
     threads: int = 1,
+    stdout_log: Path | None = None,
+    stderr_log: Path | None = None,
 ) -> bool:
     """BWA mem → SAMtools view → SAMtools sort 管道。"""
     description = t("align_mapping")
@@ -122,6 +140,9 @@ def _run_bwa_mem_pipe_sort(
         sort_code = sort_proc.returncode
 
         if bwa_code == 0 and view_code == 0 and sort_code == 0:
+            append_log(stderr_log, bwa_stderr)
+            append_log(stderr_log, view_stderr)
+            append_log(stderr_log, sort_stderr.decode("utf-8", errors="replace"))
             return True
 
         errors = "\n".join(
@@ -129,8 +150,10 @@ def _run_bwa_mem_pipe_sort(
             for part in (bwa_stderr, view_stderr, sort_stderr.decode("utf-8", errors="replace"))
             if part and part.strip()
         ) or "pipeline execution failed"
+        append_log(stderr_log, errors)
         return _print_alignment_failure(description, errors)
     except FileNotFoundError as exc:
+        append_log(stderr_log, str(exc))
         return _print_alignment_failure(description, str(exc))
     finally:
         for proc in (bwa_proc, view_proc, sort_proc):
@@ -165,16 +188,28 @@ def _format_step_label(step: str, name_key: str) -> str:
     return t("align_step_label", step=step, name=t(name_key))
 
 
-def _run_samtools_index(bam: Path) -> bool:
+def _run_samtools_index(
+    bam: Path,
+    *,
+    stdout_log: Path | None = None,
+    stderr_log: Path | None = None,
+) -> bool:
     """为 BAM 文件创建索引 (.bai)。"""
     result = _run_cmd(
         ["samtools", "index", str(bam)],
         description=t("align_sorting"),
+        stdout_log=stdout_log,
+        stderr_log=stderr_log,
     )
     return result is not None
 
 
-def _run_samtools_flagstat(bam: Path) -> str | None:
+def _run_samtools_flagstat(
+    bam: Path,
+    *,
+    stdout_log: Path | None = None,
+    stderr_log: Path | None = None,
+) -> str | None:
     """运行 samtools flagstat 并返回原始输出文本。"""
     description = t("align_flagstat")
     console.print(f"  → {description}", style="cyan")
@@ -183,8 +218,11 @@ def _run_samtools_flagstat(bam: Path) -> str | None:
             ["samtools", "flagstat", str(bam)],
             check=True, capture_output=True, text=True,
         )
+        append_log(stdout_log, result.stdout)
+        append_log(stderr_log, result.stderr)
         return result.stdout
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        append_log(stderr_log, str(exc))
         _print_alignment_failure(description, str(exc))
         return None
 
@@ -299,6 +337,7 @@ def run_alignment_pipeline(
     reads: Path,
     output: Path | None = None,
     *,
+    outdir: Path | None = None,
     threads: int = 1,
     cli_mode: bool = False,
     skip_preflight: bool = False,
@@ -328,9 +367,18 @@ def run_alignment_pipeline(
         console.print(t("align_windows_warn"), style="bold yellow")
 
     # 2. 准备输出路径
-    if output is None:
-        output = _default_output_bam(reads)
-    output.parent.mkdir(parents=True, exist_ok=True)
+    layout = create_run_layout("align", reads, outdir=outdir)
+    started_at = utc_now_iso()
+    output = resolve_result_path(layout, output, _default_output_bam(reads).name)
+    write_metadata(
+        layout,
+        status="running",
+        command="align",
+        parameters={"threads": threads},
+        inputs={"ref": str(ref), "reads": str(reads)},
+        outputs={"root": str(layout.root), "bam": str(output)},
+        started_at=started_at,
+    )
 
     console.print(
         Panel(t("align_pipeline_start", file=str(reads)), style="bold magenta")
@@ -342,32 +390,97 @@ def run_alignment_pipeline(
         console.print(_format_step_label("1/4", "align_step_index_cached"), style="bold blue")
     else:
         console.print(_format_step_label("1/4", "align_step_index"), style="bold blue")
-        if not _run_bwa_index(ref):
+        if not _run_bwa_index(ref, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log):
+            write_metadata(
+                layout,
+                status="failed",
+                command="align",
+                parameters={"threads": threads},
+                inputs={"ref": str(ref), "reads": str(reads)},
+                outputs={"root": str(layout.root), "bam": str(output)},
+                started_at=started_at,
+                completed_at=utc_now_iso(),
+            )
             return None
 
     # 4. 步骤 2：BWA mem + SAMtools view/sort
     console.print(_format_step_label("2/4", "align_step_map_sort"), style="bold blue")
-    if not _run_bwa_mem_pipe_sort(ref, reads, output, threads=threads):
+    if not _run_bwa_mem_pipe_sort(
+        ref,
+        reads,
+        output,
+        threads=threads,
+        stdout_log=layout.stdout_log,
+        stderr_log=layout.stderr_log,
+    ):
+        write_metadata(
+            layout,
+            status="failed",
+            command="align",
+            parameters={"threads": threads},
+            inputs={"ref": str(ref), "reads": str(reads)},
+            outputs={"root": str(layout.root), "bam": str(output)},
+            started_at=started_at,
+            completed_at=utc_now_iso(),
+        )
         return None
 
     # 5. 步骤 3：SAMtools index
     console.print(_format_step_label("3/4", "align_step_bam_index"), style="bold blue")
-    if not _run_samtools_index(output):
+    if not _run_samtools_index(output, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log):
+        write_metadata(
+            layout,
+            status="failed",
+            command="align",
+            parameters={"threads": threads},
+            inputs={"ref": str(ref), "reads": str(reads)},
+            outputs={"root": str(layout.root), "bam": str(output)},
+            started_at=started_at,
+            completed_at=utc_now_iso(),
+        )
         return None
 
     # 6. 步骤 4：SAMtools flagstat
     console.print(_format_step_label("4/4", "align_step_flagstat"), style="bold blue")
-    flagstat_text = _run_samtools_flagstat(output)
+    flagstat_text = _run_samtools_flagstat(output, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
     if flagstat_text is None:
+        write_metadata(
+            layout,
+            status="failed",
+            command="align",
+            parameters={"threads": threads},
+            inputs={"ref": str(ref), "reads": str(reads)},
+            outputs={"root": str(layout.root), "bam": str(output)},
+            started_at=started_at,
+            completed_at=utc_now_iso(),
+        )
         return None
 
     stats = parse_flagstat(flagstat_text)
+    flagstat_path = layout.results_dir / f"{output.stem}.flagstat.txt"
+    flagstat_path.write_text(flagstat_text, encoding="utf-8")
 
     # 显示统计
     display_alignment_stats(stats)
 
+    write_metadata(
+        layout,
+        status="success",
+        command="align",
+        parameters={"threads": threads},
+        inputs={"ref": str(ref), "reads": str(reads)},
+        outputs={
+            "root": str(layout.root),
+            "bam": str(output),
+            "flagstat": str(flagstat_path),
+        },
+        started_at=started_at,
+        completed_at=utc_now_iso(),
+        extra={"stats": stats},
+    )
+
     console.print(
-        t("align_pipeline_done", output=str(output)), style="bold green"
+        t("align_pipeline_done", output=str(layout.root)), style="bold green"
     )
     return stats
 

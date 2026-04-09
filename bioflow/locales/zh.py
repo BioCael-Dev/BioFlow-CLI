@@ -106,7 +106,7 @@ STRINGS = {
     "menu_qc": "[质控] QC Pipeline",
     "qc_title": "质控流程",
     "qc_input_prompt": "请输入 FASTQ 文件路径：",
-    "qc_output_prompt": "请输入输出目录：",
+    "qc_output_prompt": "请输入运行输出目录：",
     "qc_adapter_prompt": "Adapter 文件路径（留空跳过）：",
     "qc_minlen_prompt": "最短读长（默认 36）：",
     "qc_pipeline_start": "开始质控流程：{file}",

@@ -13,6 +13,7 @@ from rich.panel import Panel
 
 from bioflow.i18n import t
 from bioflow.preflight import PreflightError, preflight_check
+from bioflow.run_layout import append_log, create_run_layout, utc_now_iso, write_metadata
 
 console = Console()
 
@@ -20,20 +21,31 @@ console = Console()
 QC_REQUIRED_TOOLS = ("fastqc", "trimmomatic")
 
 
-def _run_cmd(cmd: list[str], *, description: str = "") -> bool:
+def _run_cmd(
+    cmd: list[str],
+    *,
+    description: str = "",
+    stdout_log: Path | None = None,
+    stderr_log: Path | None = None,
+) -> bool:
     """执行外部命令，返回是否成功。"""
     if description:
         console.print(f"  → {description}", style="cyan")
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        append_log(stdout_log, result.stdout)
+        append_log(stderr_log, result.stderr)
         return True
     except subprocess.CalledProcessError as exc:
+        append_log(stdout_log, exc.stdout or "")
+        append_log(stderr_log, exc.stderr or "")
         console.print(
             t("qc_step_failed", step=description, err=exc.stderr.strip()),
             style="bold red",
         )
         return False
     except FileNotFoundError as exc:
+        append_log(stderr_log, str(exc))
         console.print(
             t("qc_step_failed", step=description, err=str(exc)),
             style="bold red",
@@ -41,12 +53,20 @@ def _run_cmd(cmd: list[str], *, description: str = "") -> bool:
         return False
 
 
-def _run_fastqc(input_file: Path, output_dir: Path) -> bool:
+def _run_fastqc(
+    input_file: Path,
+    output_dir: Path,
+    *,
+    stdout_log: Path | None = None,
+    stderr_log: Path | None = None,
+) -> bool:
     """运行 FastQC 质量检测。"""
     output_dir.mkdir(parents=True, exist_ok=True)
     return _run_cmd(
         ["fastqc", str(input_file), "-o", str(output_dir), "--quiet"],
         description=t("qc_running_fastqc", file=input_file.name),
+        stdout_log=stdout_log,
+        stderr_log=stderr_log,
     )
 
 
@@ -56,6 +76,8 @@ def _run_trimmomatic(
     *,
     adapter: str | None = None,
     minlen: int = 36,
+    stdout_log: Path | None = None,
+    stderr_log: Path | None = None,
 ) -> bool:
     """运行 Trimmomatic 质控修剪。"""
     cmd = [
@@ -77,6 +99,8 @@ def _run_trimmomatic(
     return _run_cmd(
         cmd,
         description=t("qc_running_trimmomatic", file=input_file.name),
+        stdout_log=stdout_log,
+        stderr_log=stderr_log,
     )
 
 
@@ -84,6 +108,7 @@ def run_qc_pipeline(
     input_file: Path,
     *,
     output_dir: Path | None = None,
+    outdir: Path | None = None,
     adapter: str | None = None,
     minlen: int = 36,
     cli_mode: bool = False,
@@ -93,7 +118,7 @@ def run_qc_pipeline(
 
     Args:
         input_file: 输入 FASTQ 文件路径。
-        output_dir: 输出目录，默认在输入文件同目录下创建 qc_output/。
+        output_dir: 运行输出根目录，默认在输入文件同目录下创建 qc_run/。
         adapter: Trimmomatic adapter 文件路径（可选）。
         minlen: Trimmomatic 最短读长阈值，默认 36。
         cli_mode: 是否为 CLI 模式。
@@ -107,14 +132,21 @@ def run_qc_pipeline(
         if not preflight_check(QC_REQUIRED_TOOLS, cli_mode=cli_mode):
             return False
 
-    # 2. 准备输出目录
-    if output_dir is None:
-        output_dir = input_file.parent / "qc_output"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    fastqc_pre_dir = output_dir / "fastqc_pre"
-    fastqc_post_dir = output_dir / "fastqc_post"
-    trimmed_file = output_dir / f"{input_file.stem}.trimmed{input_file.suffix}"
+    # 2. 准备运行目录
+    layout = create_run_layout("qc", input_file, outdir=outdir or output_dir)
+    started_at = utc_now_iso()
+    fastqc_pre_dir = layout.results_dir / "fastqc_pre"
+    fastqc_post_dir = layout.results_dir / "fastqc_post"
+    trimmed_file = layout.results_dir / f"{input_file.stem}.trimmed{input_file.suffix}"
+    write_metadata(
+        layout,
+        status="running",
+        command="qc",
+        parameters={"adapter": adapter, "minlen": minlen},
+        inputs={"input": str(input_file)},
+        outputs={"root": str(layout.root), "trimmed": str(trimmed_file)},
+        started_at=started_at,
+    )
 
     console.print(
         Panel(t("qc_pipeline_start", file=str(input_file)), style="bold magenta")
@@ -122,7 +154,17 @@ def run_qc_pipeline(
 
     # 3. 步骤 1：初始 FastQC
     console.print(t("qc_step_label", step="1/3", name="FastQC"), style="bold blue")
-    if not _run_fastqc(input_file, fastqc_pre_dir):
+    if not _run_fastqc(input_file, fastqc_pre_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log):
+        write_metadata(
+            layout,
+            status="failed",
+            command="qc",
+            parameters={"adapter": adapter, "minlen": minlen},
+            inputs={"input": str(input_file)},
+            outputs={"root": str(layout.root)},
+            started_at=started_at,
+            completed_at=utc_now_iso(),
+        )
         return False
 
     # 4. 步骤 2：Trimmomatic 修剪
@@ -130,17 +172,57 @@ def run_qc_pipeline(
         t("qc_step_label", step="2/3", name="Trimmomatic"), style="bold blue"
     )
     if not _run_trimmomatic(
-        input_file, trimmed_file, adapter=adapter, minlen=minlen
+        input_file,
+        trimmed_file,
+        adapter=adapter,
+        minlen=minlen,
+        stdout_log=layout.stdout_log,
+        stderr_log=layout.stderr_log,
     ):
+        write_metadata(
+            layout,
+            status="failed",
+            command="qc",
+            parameters={"adapter": adapter, "minlen": minlen},
+            inputs={"input": str(input_file)},
+            outputs={"root": str(layout.root), "trimmed": str(trimmed_file)},
+            started_at=started_at,
+            completed_at=utc_now_iso(),
+        )
         return False
 
     # 5. 步骤 3：修剪后 FastQC
     console.print(t("qc_step_label", step="3/3", name="FastQC"), style="bold blue")
-    if not _run_fastqc(trimmed_file, fastqc_post_dir):
+    if not _run_fastqc(trimmed_file, fastqc_post_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log):
+        write_metadata(
+            layout,
+            status="failed",
+            command="qc",
+            parameters={"adapter": adapter, "minlen": minlen},
+            inputs={"input": str(input_file)},
+            outputs={"root": str(layout.root), "trimmed": str(trimmed_file)},
+            started_at=started_at,
+            completed_at=utc_now_iso(),
+        )
         return False
 
+    write_metadata(
+        layout,
+        status="success",
+        command="qc",
+        parameters={"adapter": adapter, "minlen": minlen},
+        inputs={"input": str(input_file)},
+        outputs={
+            "root": str(layout.root),
+            "fastqc_pre": str(fastqc_pre_dir),
+            "fastqc_post": str(fastqc_post_dir),
+            "trimmed": str(trimmed_file),
+        },
+        started_at=started_at,
+        completed_at=utc_now_iso(),
+    )
     console.print(
-        t("qc_pipeline_done", output=str(output_dir)), style="bold green"
+        t("qc_pipeline_done", output=str(layout.root)), style="bold green"
     )
     return True
 
@@ -169,7 +251,7 @@ def qc_menu() -> None:
         return
 
     # 输出目录
-    default_output = src.parent / "qc_output"
+    default_output = src.parent / "qc_run"
     try:
         output_path = questionary.path(
             t("qc_output_prompt"), default=str(default_output)

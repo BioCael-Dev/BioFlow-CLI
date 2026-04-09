@@ -1,5 +1,5 @@
 qc:
   input: reads.fastq
-  output: qc_results
+  outdir: runs/qc-001
   adapter: adapters.fa
   minlen: 36

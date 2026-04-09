@@ -92,20 +92,20 @@ bioflow batch -i ./data -o ./formatted -p "*.fastq" -r -w 60
 # Batch format with 4 worker processes
 bioflow batch -i ./data -o ./formatted -p "*.fastq" -r --workers 4
 
-# Run QC pipeline
-bioflow qc --input reads.fastq --output qc_results/ --adapter adapters.fa --minlen 36
+# Run QC pipeline with a managed run directory
+bioflow qc --input reads.fastq --outdir runs/qc-001 --adapter adapters.fa --minlen 36
 
 # Run QC pipeline from config
 bioflow qc --config examples/qc.yml
 
 # Run alignment pipeline
-bioflow align --ref ref.fa --input reads.fastq --output aligned.bam --threads 4
+bioflow align --ref ref.fa --input reads.fastq --outdir runs/align-001 --output aligned.bam --threads 4
 
 # Run alignment pipeline from config
 bioflow align --config examples/align.yml
 
 # Run BLAST nucleotide search
-bioflow search --db ref.fa --query query.fa --output hits.tsv --evalue 1e-5 --max-target-seqs 20
+bioflow search --db ref.fa --query query.fa --outdir runs/search-001 --output hits.tsv --evalue 1e-5 --max-target-seqs 20
 
 # Show only top 3 summarized hits
 bioflow search --db ref.fa --query query.fa --output hits.tsv --top 3
@@ -154,6 +154,13 @@ bioflow --json batch -i ./data -o ./formatted
 - parameter precedence is: explicit CLI argument > YAML config > built-in default
 - example templates are available in `examples/`
 
+### Workflow Output Layout
+
+- `qc`, `align`, and `search` now share a standard run directory layout
+- set `--outdir` to control the run root; if omitted, BioFlow-CLI creates `qc_run`, `align_run`, or `search_run` beside the input file
+- each run contains `logs/`, `results/`, `tmp/`, and `metadata.json`
+- on failure, diagnostic stdout/stderr logs are retained under `logs/`
+
 ### Batch Concurrency
 
 - `bioflow batch --workers N` enables multi-process batch formatting
@@ -178,7 +185,7 @@ pip install -e .
 
 ## Project Status
 
-Current development version: **v0.4.3**
+Current development version: **v0.5.0**
 
 Release history and notes: [GitHub Releases](https://github.com/BioCael-Dev/BioFlow-CLI/releases)
 
