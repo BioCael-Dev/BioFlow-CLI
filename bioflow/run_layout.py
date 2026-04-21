@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import platform
+import shutil
+import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from bioflow import __version__
 
@@ -28,11 +34,185 @@ STEP_RUNNING = "running"
 STEP_SUCCESS = "success"
 STEP_FAILED = "failed"
 STEP_SKIPPED = "skipped"
+STEP_STATUSES = {STEP_PENDING, STEP_RUNNING, STEP_SUCCESS, STEP_FAILED, STEP_SKIPPED}
+
+
+def _safe_stat(path: Path) -> os.stat_result | None:
+    """返回文件 stat，失败时返回 None。"""
+    try:
+        return path.stat()
+    except OSError:
+        return None
 
 
 def utc_now_iso() -> str:
     """返回 UTC ISO8601 时间字符串。"""
     return datetime.now(timezone.utc).isoformat()
+
+
+def _first_nonempty_line(text: str) -> str:
+    """返回文本中的第一条非空行。"""
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            return line
+    return ""
+
+
+def sha256_file(path: Path) -> str:
+    """计算文件 sha256。"""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def describe_path(path: str | Path) -> dict[str, Any]:
+    """返回文件或目录的基础描述信息。"""
+    resolved = Path(path)
+    stat_result = _safe_stat(resolved)
+    payload: dict[str, Any] = {
+        "path": str(resolved),
+        "exists": resolved.exists(),
+        "type": "missing",
+    }
+    if stat_result is None:
+        return payload
+
+    if resolved.is_file():
+        payload["type"] = "file"
+        payload["size_bytes"] = stat_result.st_size
+        payload["modified_at"] = datetime.fromtimestamp(
+            stat_result.st_mtime,
+            tz=timezone.utc,
+        ).isoformat()
+        try:
+            payload["sha256"] = sha256_file(resolved)
+        except OSError:
+            payload["sha256"] = ""
+    elif resolved.is_dir():
+        payload["type"] = "directory"
+        payload["modified_at"] = datetime.fromtimestamp(
+            stat_result.st_mtime,
+            tz=timezone.utc,
+        ).isoformat()
+    return payload
+
+
+def collect_input_details(paths: dict[str, str | Path]) -> dict[str, dict[str, Any]]:
+    """收集输入文件的大小、mtime 和 sha256 等信息。"""
+    return {name: describe_path(value) for name, value in paths.items()}
+
+
+def _capture_command_output(cmd: list[str]) -> str:
+    """执行命令并返回首条非空输出，失败时返回空字符串。"""
+    try:
+        result = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+    combined = "\n".join(part for part in (result.stdout, result.stderr) if part)
+    return _first_nonempty_line(combined)
+
+
+def detect_tool_version(tool: str) -> str:
+    """尽力获取工具版本字符串。"""
+    executable = shutil.which(tool)
+    if not executable:
+        return ""
+
+    for candidate in ([executable, "--version"], [executable, "-version"], [executable, "version"]):
+        output = _capture_command_output(candidate)
+        if output:
+            return output
+    return ""
+
+
+def collect_tool_versions(tools: list[str] | tuple[str, ...]) -> dict[str, str]:
+    """收集工作流依赖工具版本。"""
+    return {tool: detect_tool_version(tool) for tool in tools}
+
+
+def build_runtime_context() -> dict[str, str]:
+    """构建运行环境信息。"""
+    return {
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "system": platform.system(),
+        "release": platform.release(),
+        "machine": platform.machine(),
+        "bioflow_version": __version__,
+        "executable": sys.executable,
+    }
+
+
+def read_log_tail(path: Path | None, *, lines: int = 20) -> str:
+    """读取日志文件末尾若干行。"""
+    if path is None or not path.exists():
+        return ""
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    selected = content.splitlines()[-lines:]
+    return "\n".join(selected).strip()
+
+
+def build_failure_summary(
+    step_name: str,
+    *,
+    stderr_log: Path | None = None,
+    fallback: str = "",
+) -> str:
+    """根据步骤和日志构建失败摘要。"""
+    tail = read_log_tail(stderr_log, lines=8)
+    if tail:
+        return f"{step_name}: {tail}"
+    if fallback:
+        return f"{step_name}: {fallback}"
+    return step_name
+
+
+def metadata_supports_resume(metadata: dict[str, Any], step_name: str) -> bool:
+    """判断 metadata 是否足够支撑 resume 判断。"""
+    if not isinstance(metadata, dict):
+        return False
+    steps = metadata.get("steps")
+    if not isinstance(steps, dict):
+        return False
+    step = steps.get(step_name)
+    return isinstance(step, dict) and step.get("status") in {STEP_SUCCESS, STEP_SKIPPED}
+
+
+def step_resume_ready(
+    metadata: dict[str, Any],
+    step_name: str,
+    *,
+    validator: Callable[[], bool],
+    required_outputs: tuple[str, ...] = (),
+) -> bool:
+    """更严格地判断某一步是否可安全 resume。"""
+    if not metadata_supports_resume(metadata, step_name):
+        return False
+
+    step = metadata["steps"][step_name]
+    outputs = step.get("outputs")
+    if required_outputs:
+        if not isinstance(outputs, dict):
+            return False
+        for key in required_outputs:
+            value = outputs.get(key)
+            if value in (None, "", [], {}):
+                return False
+
+    return validator()
 
 
 def default_run_root(workflow: str, anchor: Path) -> Path:
@@ -104,7 +284,13 @@ def init_steps(step_names: list[str], existing: dict[str, Any] | None = None) ->
     existing_steps = existing if isinstance(existing, dict) else {}
     for step_name in step_names:
         step_payload = existing_steps.get(step_name)
-        steps[step_name] = dict(step_payload) if isinstance(step_payload, dict) else {"status": STEP_PENDING}
+        if isinstance(step_payload, dict):
+            step = dict(step_payload)
+            if step.get("status") not in STEP_STATUSES:
+                step["status"] = STEP_PENDING
+            steps[step_name] = step
+        else:
+            steps[step_name] = {"status": STEP_PENDING}
     return steps
 
 
@@ -115,6 +301,7 @@ def set_step_state(
     *,
     outputs: dict[str, Any] | None = None,
     note: str | None = None,
+    error: str | None = None,
 ) -> None:
     """更新单个步骤状态。"""
     now = utc_now_iso()
@@ -124,12 +311,17 @@ def set_step_state(
     if status == STEP_RUNNING:
         step["started_at"] = now
         step.pop("completed_at", None)
+        step.pop("error", None)
     else:
         step["completed_at"] = now
     if outputs:
         step["outputs"] = outputs
-    if note:
+    if note is not None:
         step["note"] = note
+    if error is not None:
+        step["error"] = error
+    elif status != STEP_FAILED:
+        step.pop("error", None)
     steps[step_name] = step
 
 
@@ -162,6 +354,11 @@ def write_metadata(
         "parameters": parameters,
         "inputs": inputs,
         "outputs": outputs,
+        "logs": {
+            "stdout": str(layout.stdout_log),
+            "stderr": str(layout.stderr_log),
+        },
+        "runtime": build_runtime_context(),
     }
     if extra:
         payload.update(extra)

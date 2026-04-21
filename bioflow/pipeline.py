@@ -19,11 +19,14 @@ from bioflow.run_layout import (
     STEP_SKIPPED,
     STEP_SUCCESS,
     append_log,
+    build_failure_summary,
+    collect_input_details,
+    collect_tool_versions,
     create_run_layout,
     init_steps,
     read_metadata,
     set_step_state,
-    step_succeeded,
+    step_resume_ready,
     utc_now_iso,
     write_metadata,
 )
@@ -166,6 +169,9 @@ def run_qc_pipeline(
     fastqc_post_dir = layout.results_dir / "fastqc_post"
     trimmed_file = layout.results_dir / f"{input_file.stem}.trimmed{input_file.suffix}"
     existing_metadata = read_metadata(layout)
+    tool_versions = collect_tool_versions(QC_REQUIRED_TOOLS)
+    input_details = collect_input_details({"input": input_file})
+    failure_summary = str(existing_metadata.get("failure_summary", ""))
     steps = init_steps(
         [QC_STEP_FASTQC_PRE, QC_STEP_TRIM, QC_STEP_FASTQC_POST],
         existing_metadata.get("steps"),
@@ -186,7 +192,13 @@ def run_qc_pipeline(
             },
             started_at=started_at,
             completed_at=completed_at,
-            extra={"steps": steps, "resume_used": resume},
+            extra={
+                "steps": steps,
+                "resume_used": resume,
+                "input_details": input_details,
+                "tool_versions": tool_versions,
+                "failure_summary": failure_summary,
+            },
         )
 
     persist("running")
@@ -197,14 +209,20 @@ def run_qc_pipeline(
 
     # 3. 步骤 1：初始 FastQC
     console.print(t("qc_step_label", step="1/3", name="FastQC"), style="bold blue")
-    if resume and step_succeeded(steps, QC_STEP_FASTQC_PRE) and _dir_has_outputs(fastqc_pre_dir):
+    if resume and step_resume_ready(
+        existing_metadata,
+        QC_STEP_FASTQC_PRE,
+        validator=lambda: _dir_has_outputs(fastqc_pre_dir),
+        required_outputs=("dir",),
+    ):
         set_step_state(steps, QC_STEP_FASTQC_PRE, STEP_SKIPPED, outputs={"dir": str(fastqc_pre_dir)}, note="reused existing output")
         persist("running")
     else:
         set_step_state(steps, QC_STEP_FASTQC_PRE, STEP_RUNNING)
         persist("running")
         if not _run_fastqc(input_file, fastqc_pre_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log):
-            set_step_state(steps, QC_STEP_FASTQC_PRE, STEP_FAILED, outputs={"dir": str(fastqc_pre_dir)})
+            failure_summary = build_failure_summary(QC_STEP_FASTQC_PRE, stderr_log=layout.stderr_log, fallback="FastQC failed")
+            set_step_state(steps, QC_STEP_FASTQC_PRE, STEP_FAILED, outputs={"dir": str(fastqc_pre_dir)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return False
         set_step_state(steps, QC_STEP_FASTQC_PRE, STEP_SUCCESS, outputs={"dir": str(fastqc_pre_dir)})
@@ -214,7 +232,12 @@ def run_qc_pipeline(
     console.print(
         t("qc_step_label", step="2/3", name="Trimmomatic"), style="bold blue"
     )
-    if resume and step_succeeded(steps, QC_STEP_TRIM) and _is_nonempty_file(trimmed_file):
+    if resume and step_resume_ready(
+        existing_metadata,
+        QC_STEP_TRIM,
+        validator=lambda: _is_nonempty_file(trimmed_file),
+        required_outputs=("trimmed",),
+    ):
         set_step_state(steps, QC_STEP_TRIM, STEP_SKIPPED, outputs={"trimmed": str(trimmed_file)}, note="reused existing output")
         persist("running")
     else:
@@ -228,7 +251,8 @@ def run_qc_pipeline(
             stdout_log=layout.stdout_log,
             stderr_log=layout.stderr_log,
         ):
-            set_step_state(steps, QC_STEP_TRIM, STEP_FAILED, outputs={"trimmed": str(trimmed_file)})
+            failure_summary = build_failure_summary(QC_STEP_TRIM, stderr_log=layout.stderr_log, fallback="Trimmomatic failed")
+            set_step_state(steps, QC_STEP_TRIM, STEP_FAILED, outputs={"trimmed": str(trimmed_file)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return False
         set_step_state(steps, QC_STEP_TRIM, STEP_SUCCESS, outputs={"trimmed": str(trimmed_file)})
@@ -236,18 +260,25 @@ def run_qc_pipeline(
 
     # 5. 步骤 3：修剪后 FastQC
     console.print(t("qc_step_label", step="3/3", name="FastQC"), style="bold blue")
-    if resume and step_succeeded(steps, QC_STEP_FASTQC_POST) and _dir_has_outputs(fastqc_post_dir):
+    if resume and step_resume_ready(
+        existing_metadata,
+        QC_STEP_FASTQC_POST,
+        validator=lambda: _dir_has_outputs(fastqc_post_dir),
+        required_outputs=("dir",),
+    ):
         set_step_state(steps, QC_STEP_FASTQC_POST, STEP_SKIPPED, outputs={"dir": str(fastqc_post_dir)}, note="reused existing output")
         persist("running")
     else:
         set_step_state(steps, QC_STEP_FASTQC_POST, STEP_RUNNING)
         persist("running")
         if not _run_fastqc(trimmed_file, fastqc_post_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log):
-            set_step_state(steps, QC_STEP_FASTQC_POST, STEP_FAILED, outputs={"dir": str(fastqc_post_dir)})
+            failure_summary = build_failure_summary(QC_STEP_FASTQC_POST, stderr_log=layout.stderr_log, fallback="FastQC failed")
+            set_step_state(steps, QC_STEP_FASTQC_POST, STEP_FAILED, outputs={"dir": str(fastqc_post_dir)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return False
         set_step_state(steps, QC_STEP_FASTQC_POST, STEP_SUCCESS, outputs={"dir": str(fastqc_post_dir)})
 
+    failure_summary = ""
     persist("success", completed_at=utc_now_iso())
     console.print(
         t("qc_pipeline_done", output=str(layout.root)), style="bold green"

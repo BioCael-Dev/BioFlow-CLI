@@ -138,7 +138,12 @@ STRINGS = {
     "report_section_summary": "运行摘要",
     "report_section_params": "运行参数",
     "report_section_inputs": "输入文件",
+    "report_section_input_details": "输入详情",
     "report_section_outputs": "输出文件",
+    "report_section_runtime": "运行环境",
+    "report_section_tools": "工具版本",
+    "report_section_logs": "日志路径",
+    "report_section_diagnostics": "诊断摘要",
     "report_section_steps": "执行步骤",
     "report_field_workflow": "工作流",
     "report_field_version": "版本",
@@ -152,6 +157,9 @@ STRINGS = {
     "report_col_status": "状态",
     "report_col_start": "开始",
     "report_col_end": "结束",
+
+    # === Inspect ===
+    "inspect_invalid_input": "运行目录无效：{path}",
 
     # === 批量处理 ===
     "batch_processing": "批量处理文件中...",

@@ -34,6 +34,7 @@ License text: [MIT License](LICENSE)
   - `makeblastdb` + `blastn` nucleotide search workflow
   - Tabular result output (`outfmt 6`) for downstream analysis
 - **QC Pipeline**: Integrated FastQC + Trimmomatic workflow
+- **Run Inspection**: `bioflow inspect` summarizes run status, critical outputs, failed steps, and log locations
 - **HTML Run Reports**: Export one or more workflow runs into a portable single-file HTML summary
 - **YAML Workflow Config**: run QC / alignment / search from reusable config files
 - **Structured Output**: `--json` output for automation pipelines
@@ -129,6 +130,12 @@ bioflow report --input runs/qc-001 --output qc-report.html
 # Export a combined HTML report for multiple runs under one directory
 bioflow report --input runs --output runs-report.html --title "BioFlow Run Summary"
 
+# Inspect run metadata, outputs, and diagnostics
+bioflow inspect --input runs/qc-001
+
+# Inspect in JSON mode for automation
+bioflow --json inspect --input runs/qc-001
+
 # List tool status
 bioflow env --list
 
@@ -175,20 +182,28 @@ bioflow --json batch -i ./data -o ./formatted
 - `qc`, `align`, and `search` now share a standard run directory layout
 - set `--outdir` to control the run root; if omitted, BioFlow-CLI creates `qc_run`, `align_run`, or `search_run` beside the input file
 - each run contains `logs/`, `results/`, `tmp/`, and `metadata.json`
+- metadata now records input file size / mtime / sha256, runtime environment, tool versions, and failure summary
 - on failure, diagnostic stdout/stderr logs are retained under `logs/`
 
 ### Resume And Checkpoints
 
 - `bioflow qc --resume`, `bioflow align --resume`, and `bioflow search --resume` resume from the latest valid workflow checkpoint
 - completed steps are reused automatically when their key outputs remain valid
+- resume validation also checks metadata step status and required output descriptors before reusing a checkpoint
 - incomplete or corrupted intermediate outputs are detected and recomputed
 - TUI mode now prompts when an existing run directory contains resumable metadata
+
+### Run Inspection
+
+- `bioflow inspect --input <run_dir>` prints workflow status, critical outputs, failed steps, and log paths
+- `bioflow --json inspect --input <run_dir>` emits structured diagnostics for scripts
+- old run directories remain readable even if they predate the enhanced metadata schema
 
 ### HTML Reports
 
 - `bioflow report --input <run_dir>` exports a single-run HTML report from `metadata.json`
 - `bioflow report --input <parent_dir>` scans immediate subdirectories and combines multiple runs into one report
-- the generated report includes workflow summary, parameters, input/output paths, and per-step status
+- the generated report includes workflow summary, input details, runtime environment, tool versions, logs, failure summary, and per-step status
 - TUI mode also exposes report export from the main menu
 
 ### Batch Concurrency
@@ -215,7 +230,7 @@ pip install -e .[dev]
 
 ## Project Status
 
-Current development version: **v0.5.2**
+Current development version: **v0.6.0**
 
 Release history and notes: [GitHub Releases](https://github.com/BioCael-Dev/BioFlow-CLI/releases)
 

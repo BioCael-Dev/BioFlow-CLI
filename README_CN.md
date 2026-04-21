@@ -29,6 +29,7 @@ BioFlow-CLI 是一个基于 **MIT 许可证** 发布的 **开源项目**。
 - **序列比对** — 集成 BWA + SAMtools 完整流程，支持建索引、比对、排序、BAM 索引与比对统计
 - **BLAST 检索** — 集成 `makeblastdb` + `blastn` 基础核酸检索流程，输出标准 tabular 结果
 - **QC 流程** — 集成 FastQC + Trimmomatic 的质量控制流水线
+- **运行检查** — 提供 `bioflow inspect`，可汇总运行状态、关键输出、失败步骤与日志位置
 - **HTML 运行报告** — 可将单次或多次工作流运行导出为单文件 HTML 汇总报告
 - **YAML 工作流配置** — 可通过配置文件复用 QC / 比对 / 检索参数
 - **结构化输出** — 支持 `--json` 输出，便于自动化集成和脚本调用
@@ -90,6 +91,7 @@ BioFlow-CLI/
 │   ├── alignment.py       # 序列比对流程
 │   ├── search.py          # BLAST 检索流程
 │   ├── pipeline.py        # QC 流程管理
+│   ├── inspect.py         # 运行检查与诊断摘要
 │   ├── report.py          # HTML 运行报告导出
 │   ├── preflight.py       # 环境预检
 │   └── locales/
@@ -171,6 +173,12 @@ bioflow report --input runs/qc-001 --output qc-report.html
 # 为目录下多次运行导出汇总 HTML 报告
 bioflow report --input runs --output runs-report.html --title "BioFlow 运行汇总"
 
+# 检查运行目录状态、关键输出和日志路径
+bioflow inspect --input runs/qc-001
+
+# JSON 模式运行检查
+bioflow --json inspect --input runs/qc-001
+
 # 列出生物工具安装状态
 bioflow env --list
 
@@ -215,20 +223,28 @@ bioflow --json batch -i ./data -o ./formatted
 - `qc`、`align`、`search` 现在统一使用标准运行目录布局
 - 可通过 `--outdir` 指定运行根目录；未指定时会在输入文件旁自动创建 `qc_run`、`align_run` 或 `search_run`
 - 每次运行都会生成 `logs/`、`results/`、`tmp/` 和 `metadata.json`
+- `metadata.json` 现在额外记录输入文件大小 / 修改时间 / sha256、运行环境、工具版本和失败摘要
 - 若运行失败，诊断日志会保留在 `logs/` 目录中，便于排错
 
 #### 恢复执行与检查点
 
 - `bioflow qc --resume`、`bioflow align --resume`、`bioflow search --resume` 可从最近一次有效检查点恢复执行
 - 已完成且输出有效的步骤会自动复用
+- resume 判断除了检查产物是否存在，也会校验 metadata 步骤状态和关键输出描述字段
 - 缺失或损坏的中间结果会被识别并重新计算
 - TUI 模式下检测到可恢复运行目录时会给出恢复提示
+
+#### 运行检查
+
+- `bioflow inspect --input <run_dir>` 可输出运行状态、关键输出、失败步骤和日志路径
+- `bioflow --json inspect --input <run_dir>` 可输出结构化诊断结果，便于脚本集成
+- 旧版运行目录仍可读取，不要求必须包含所有新字段
 
 #### HTML 报告导出
 
 - `bioflow report --input <run_dir>` 可基于 `metadata.json` 导出单次运行报告
 - `bioflow report --input <parent_dir>` 会扫描其一级子目录并合并多次运行结果
-- 生成的报告包含运行摘要、参数、输入/输出路径以及步骤状态表
+- 生成的报告包含运行摘要、输入详情、运行环境、工具版本、日志路径、失败摘要以及步骤状态表
 - TUI 主菜单也已提供报告导出入口
 
 #### 批量并发
@@ -255,7 +271,7 @@ pip install -e .[dev]
 
 ## 项目状态
 
-当前开发版本：**v0.5.2**
+当前开发版本：**v0.6.0**
 
 ## 许可证
 

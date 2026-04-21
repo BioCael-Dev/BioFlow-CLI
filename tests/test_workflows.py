@@ -35,6 +35,8 @@ def test_qc_pipeline_uses_standard_outdir(tmp_path: Path, monkeypatch) -> None:
     metadata = json.loads((run_root / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["status"] == "success"
     assert metadata["outputs"]["trimmed"].endswith("reads.trimmed.fastq")
+    assert metadata["input_details"]["input"]["sha256"]
+    assert "python_version" in metadata["runtime"]
 
 
 def test_alignment_pipeline_writes_results_and_metadata(tmp_path: Path, monkeypatch) -> None:
@@ -72,6 +74,7 @@ def test_alignment_pipeline_writes_results_and_metadata(tmp_path: Path, monkeypa
     metadata = json.loads((run_root / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["status"] == "success"
     assert metadata["stats"]["mapped"] == 8
+    assert "bwa" in metadata["tool_versions"]
 
 
 def test_search_pipeline_generates_summary_and_metadata(tmp_path: Path, monkeypatch) -> None:
@@ -103,6 +106,7 @@ def test_search_pipeline_generates_summary_and_metadata(tmp_path: Path, monkeypa
     metadata = json.loads((run_root / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["status"] == "success"
     assert metadata["summary"]["hit_count"] == 1
+    assert metadata["input_details"]["query"]["size_bytes"] > 0
 
 
 def test_search_run_cmd_retains_failure_logs(tmp_path: Path, monkeypatch) -> None:
@@ -172,9 +176,9 @@ def test_qc_resume_skips_completed_steps(tmp_path: Path, monkeypatch) -> None:
         json.dumps(
             {
                 "steps": {
-                    "fastqc_pre": {"status": "success"},
-                    "trimmomatic": {"status": "success"},
-                    "fastqc_post": {"status": "success"},
+                    "fastqc_pre": {"status": "success", "outputs": {"dir": str(run_root / "results" / "fastqc_pre")}},
+                    "trimmomatic": {"status": "success", "outputs": {"trimmed": str(trimmed)}},
+                    "fastqc_post": {"status": "success", "outputs": {"dir": str(run_root / "results" / "fastqc_post")}},
                 }
             }
         ),
@@ -204,8 +208,8 @@ def test_qc_resume_recomputes_invalid_trimmed_output(tmp_path: Path, monkeypatch
         json.dumps(
             {
                 "steps": {
-                    "fastqc_pre": {"status": "success"},
-                    "trimmomatic": {"status": "success"},
+                    "fastqc_pre": {"status": "success", "outputs": {"dir": str(run_root / "results" / "fastqc_pre")}},
+                    "trimmomatic": {"status": "success", "outputs": {"trimmed": str(trimmed)}},
                 }
             }
         ),
@@ -253,10 +257,10 @@ def test_alignment_resume_skips_completed_steps(tmp_path: Path, monkeypatch) -> 
         json.dumps(
             {
                 "steps": {
-                    "bwa_index": {"status": "success"},
-                    "map_sort": {"status": "success"},
-                    "bam_index": {"status": "success"},
-                    "flagstat": {"status": "success"},
+                    "bwa_index": {"status": "success", "outputs": {"index_files": [str(ref.with_suffix(ref.suffix + suffix)) for suffix in (".amb", ".ann", ".bwt", ".pac", ".sa")]}},
+                    "map_sort": {"status": "success", "outputs": {"bam": str(bam)}},
+                    "bam_index": {"status": "success", "outputs": {"bai": str(bam.with_suffix('.bam.bai'))}},
+                    "flagstat": {"status": "success", "outputs": {"flagstat": str(run_root / "results" / "reads.sorted.flagstat.txt")}},
                 }
             }
         ),
@@ -292,10 +296,10 @@ def test_alignment_resume_recomputes_invalid_flagstat(tmp_path: Path, monkeypatc
         json.dumps(
             {
                 "steps": {
-                    "bwa_index": {"status": "success"},
-                    "map_sort": {"status": "success"},
-                    "bam_index": {"status": "success"},
-                    "flagstat": {"status": "success"},
+                    "bwa_index": {"status": "success", "outputs": {"index_files": [str(ref.with_suffix(ref.suffix + suffix)) for suffix in (".amb", ".ann", ".bwt", ".pac", ".sa")]}},
+                    "map_sort": {"status": "success", "outputs": {"bam": str(bam)}},
+                    "bam_index": {"status": "success", "outputs": {"bai": str(bam.with_suffix('.bam.bai'))}},
+                    "flagstat": {"status": "success", "outputs": {"flagstat": str(run_root / "results" / "reads.sorted.flagstat.txt")}},
                 }
             }
         ),
@@ -335,9 +339,9 @@ def test_search_resume_skips_completed_steps(tmp_path: Path, monkeypatch) -> Non
         json.dumps(
             {
                 "steps": {
-                    "makeblastdb": {"status": "success"},
-                    "blastn": {"status": "success"},
-                    "summary": {"status": "success"},
+                    "makeblastdb": {"status": "success", "outputs": {"db": str(db)}},
+                    "blastn": {"status": "success", "outputs": {"tsv": str(tsv)}},
+                    "summary": {"status": "success", "outputs": {"summary": str(run_root / "results" / "search_summary.json")}},
                 }
             }
         ),

@@ -20,12 +20,15 @@ from bioflow.run_layout import (
     STEP_SKIPPED,
     STEP_SUCCESS,
     append_log,
+    build_failure_summary,
+    collect_input_details,
+    collect_tool_versions,
     create_run_layout,
     init_steps,
     read_metadata,
     resolve_result_path,
     set_step_state,
-    step_succeeded,
+    step_resume_ready,
     utc_now_iso,
     write_metadata,
 )
@@ -317,13 +320,22 @@ def run_blast_search(
     output = resolve_result_path(layout, output, f"{query_fasta.stem}.blast.tsv")
     summary_path = layout.results_dir / "search_summary.json"
     existing_metadata = read_metadata(layout)
+    tool_versions = collect_tool_versions(SEARCH_REQUIRED_TOOLS)
+    input_details = collect_input_details({"db": db_fasta, "query": query_fasta})
+    failure_summary = str(existing_metadata.get("failure_summary", ""))
     steps = init_steps(
         [SEARCH_STEP_DB, SEARCH_STEP_BLASTN, SEARCH_STEP_SUMMARY],
         existing_metadata.get("steps"),
     )
 
     def persist(status: str, *, completed_at: str | None = None, summary: dict[str, object] | None = None) -> None:
-        extra: dict[str, object] = {"steps": steps, "resume_used": resume}
+        extra: dict[str, object] = {
+            "steps": steps,
+            "resume_used": resume,
+            "input_details": input_details,
+            "tool_versions": tool_versions,
+            "failure_summary": failure_summary,
+        }
         if summary is not None:
             extra["summary"] = summary
         write_metadata(
@@ -349,7 +361,12 @@ def run_blast_search(
             )
         )
 
-    if resume and step_succeeded(steps, SEARCH_STEP_DB) and _blast_db_ready(db_fasta):
+    if resume and step_resume_ready(
+        existing_metadata,
+        SEARCH_STEP_DB,
+        validator=lambda: _blast_db_ready(db_fasta),
+        required_outputs=("db",),
+    ):
         set_step_state(steps, SEARCH_STEP_DB, STEP_SKIPPED, outputs={"db": str(db_fasta)}, note="reused existing output")
         persist("running")
         if not quiet:
@@ -370,7 +387,8 @@ def run_blast_search(
             stdout_log=layout.stdout_log,
             stderr_log=layout.stderr_log,
         ):
-            set_step_state(steps, SEARCH_STEP_DB, STEP_FAILED, outputs={"db": str(db_fasta)})
+            failure_summary = build_failure_summary(SEARCH_STEP_DB, stderr_log=layout.stderr_log, fallback="makeblastdb failed")
+            set_step_state(steps, SEARCH_STEP_DB, STEP_FAILED, outputs={"db": str(db_fasta)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return None
         set_step_state(steps, SEARCH_STEP_DB, STEP_SUCCESS, outputs={"db": str(db_fasta)})
@@ -378,7 +396,12 @@ def run_blast_search(
 
     if not quiet:
         console.print(t("search_step_blastn"), style="bold blue")
-    if resume and step_succeeded(steps, SEARCH_STEP_BLASTN) and _is_nonempty_file(output):
+    if resume and step_resume_ready(
+        existing_metadata,
+        SEARCH_STEP_BLASTN,
+        validator=lambda: _is_nonempty_file(output),
+        required_outputs=("tsv",),
+    ):
         try:
             hits = parse_blast_tsv(output)
         except ValueError:
@@ -399,7 +422,8 @@ def run_blast_search(
                 stdout_log=layout.stdout_log,
                 stderr_log=layout.stderr_log,
             ):
-                set_step_state(steps, SEARCH_STEP_BLASTN, STEP_FAILED, outputs={"tsv": str(output)})
+                failure_summary = build_failure_summary(SEARCH_STEP_BLASTN, stderr_log=layout.stderr_log, fallback="blastn failed")
+                set_step_state(steps, SEARCH_STEP_BLASTN, STEP_FAILED, outputs={"tsv": str(output)}, error=failure_summary)
                 persist("failed", completed_at=utc_now_iso())
                 return None
             hits = parse_blast_tsv(output)
@@ -418,14 +442,20 @@ def run_blast_search(
             stdout_log=layout.stdout_log,
             stderr_log=layout.stderr_log,
         ):
-            set_step_state(steps, SEARCH_STEP_BLASTN, STEP_FAILED, outputs={"tsv": str(output)})
+            failure_summary = build_failure_summary(SEARCH_STEP_BLASTN, stderr_log=layout.stderr_log, fallback="blastn failed")
+            set_step_state(steps, SEARCH_STEP_BLASTN, STEP_FAILED, outputs={"tsv": str(output)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return None
         hits = parse_blast_tsv(output)
         set_step_state(steps, SEARCH_STEP_BLASTN, STEP_SUCCESS, outputs={"tsv": str(output)})
         persist("running")
 
-    if resume and step_succeeded(steps, SEARCH_STEP_SUMMARY) and _summary_ready(summary_path):
+    if resume and step_resume_ready(
+        existing_metadata,
+        SEARCH_STEP_SUMMARY,
+        validator=lambda: _summary_ready(summary_path),
+        required_outputs=("summary",),
+    ):
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         set_step_state(steps, SEARCH_STEP_SUMMARY, STEP_SKIPPED, outputs={"summary": str(summary_path)}, note="reused existing output")
         persist("running", summary=summary)
@@ -442,6 +472,7 @@ def run_blast_search(
         )
         display_search_summary(summary)
 
+    failure_summary = ""
     persist("success", completed_at=utc_now_iso(), summary=summary)
 
     return {

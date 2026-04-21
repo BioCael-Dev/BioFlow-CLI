@@ -138,7 +138,12 @@ STRINGS = {
     "report_section_summary": "Run Summary",
     "report_section_params": "Parameters",
     "report_section_inputs": "Inputs",
+    "report_section_input_details": "Input Details",
     "report_section_outputs": "Outputs",
+    "report_section_runtime": "Runtime Environment",
+    "report_section_tools": "Tool Versions",
+    "report_section_logs": "Logs",
+    "report_section_diagnostics": "Diagnostics",
     "report_section_steps": "Steps",
     "report_field_workflow": "Workflow",
     "report_field_version": "Version",
@@ -152,6 +157,9 @@ STRINGS = {
     "report_col_status": "Status",
     "report_col_start": "Start",
     "report_col_end": "End",
+
+    # === Inspect ===
+    "inspect_invalid_input": "Invalid run directory: {path}",
 
     # === Batch Processing ===
     "batch_processing": "Batch processing files...",

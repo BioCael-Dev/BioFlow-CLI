@@ -36,6 +36,11 @@ class RunInfo:
     inputs: dict[str, Any]
     outputs: dict[str, Any]
     steps: dict[str, Any]
+    logs: dict[str, Any]
+    runtime: dict[str, Any]
+    tool_versions: dict[str, Any]
+    input_details: dict[str, Any]
+    failure_summary: str
 
 
 def parse_metadata(run_dir: Path) -> RunInfo:
@@ -70,6 +75,11 @@ def parse_metadata(run_dir: Path) -> RunInfo:
         inputs=data.get("inputs", {}),
         outputs=data.get("outputs", {}),
         steps=data.get("steps", {}),
+        logs=data.get("logs", {}),
+        runtime=data.get("runtime", {}),
+        tool_versions=data.get("tool_versions", {}),
+        input_details=data.get("input_details", {}),
+        failure_summary=data.get("failure_summary", ""),
     )
 
 
@@ -215,12 +225,27 @@ def _render_run_card(run: RunInfo) -> str:
         _render_kv_table(run.parameters),
         f'<div class="section-title">{_esc(t("report_section_inputs"))}</div>',
         _render_kv_table(run.inputs),
+        f'<div class="section-title">{_esc(t("report_section_input_details"))}</div>',
+        _render_kv_table(run.input_details),
         f'<div class="section-title">{_esc(t("report_section_outputs"))}</div>',
         _render_kv_table(run.outputs),
+        f'<div class="section-title">{_esc(t("report_section_runtime"))}</div>',
+        _render_kv_table(run.runtime),
+        f'<div class="section-title">{_esc(t("report_section_tools"))}</div>',
+        _render_kv_table(run.tool_versions),
+        f'<div class="section-title">{_esc(t("report_section_logs"))}</div>',
+        _render_kv_table(run.logs),
         f'<div class="section-title">{_esc(t("report_section_steps"))}</div>',
         _render_steps_table(run.steps),
-        "</div>",
     ]
+    if run.failure_summary:
+        sections.extend(
+            [
+                f'<div class="section-title">{_esc(t("report_section_diagnostics"))}</div>',
+                f"<p>{_esc(run.failure_summary)}</p>",
+            ]
+        )
+    sections.append("</div>")
     return "\n".join(sections)
 
 

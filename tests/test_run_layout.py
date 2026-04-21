@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from bioflow.run_layout import create_run_layout, write_metadata
@@ -23,8 +24,12 @@ def test_create_run_layout_and_metadata(tmp_path: Path) -> None:
         outputs={"root": str(layout.root)},
         started_at="2026-04-08T00:00:00+00:00",
         completed_at="2026-04-08T00:01:00+00:00",
+        extra={"failure_summary": "", "input_details": {"input": {"path": str(anchor)}}},
     )
 
-    metadata = layout.metadata_path.read_text(encoding="utf-8")
-    assert '"workflow": "qc"' in metadata
-    assert '"status": "success"' in metadata
+    metadata = json.loads(layout.metadata_path.read_text(encoding="utf-8"))
+    assert metadata["workflow"] == "qc"
+    assert metadata["status"] == "success"
+    assert metadata["logs"]["stdout"].endswith("qc.stdout.log")
+    assert metadata["runtime"]["bioflow_version"]
+    assert metadata["input_details"]["input"]["path"] == str(anchor)

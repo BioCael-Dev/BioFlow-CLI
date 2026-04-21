@@ -23,6 +23,7 @@ from bioflow.env_manager import BIO_TOOLS, _check_conda, _check_installed
 from bioflow.alignment import run_alignment_pipeline
 from bioflow.config import ConfigError, load_workflow_config
 from bioflow.i18n import init_language, t
+from bioflow.inspect import inspect_run, render_inspection_text
 from bioflow.pipeline import run_qc_pipeline
 from bioflow.preflight import PreflightError
 from bioflow.report import generate_report
@@ -599,6 +600,38 @@ def cmd_report(args: argparse.Namespace) -> int:
         return EXIT_RUNTIME_ERROR
 
 
+def cmd_inspect(args: argparse.Namespace) -> int:
+    """处理 inspect 子命令：检查运行目录状态。"""
+    input_path = Path(args.input)
+
+    if not input_path.exists() or not input_path.is_dir():
+        if args.json:
+            print(json.dumps({"error": "path_not_found", "path": str(input_path)}, ensure_ascii=False))
+        else:
+            console_err.print(t("inspect_invalid_input", path=str(input_path)), style="bold red")
+        return EXIT_ARGUMENT_ERROR
+
+    try:
+        payload = inspect_run(input_path)
+        if args.json:
+            print(json.dumps({"status": "success", **payload}, ensure_ascii=False))
+        else:
+            console_out.print(render_inspection_text(payload))
+        return EXIT_SUCCESS
+    except FileNotFoundError as exc:
+        if args.json:
+            print(json.dumps({"error": "metadata_not_found", "message": str(exc)}, ensure_ascii=False))
+        else:
+            console_err.print(str(exc), style="bold red")
+        return EXIT_ARGUMENT_ERROR
+    except Exception as exc:
+        if args.json:
+            print(json.dumps({"error": "runtime_error", "message": str(exc)}, ensure_ascii=False))
+        else:
+            console_err.print(t("error_unexpected", err=str(exc)), style="bold red")
+        return EXIT_RUNTIME_ERROR
+
+
 def cmd_search(args: argparse.Namespace) -> int:
     """处理 search 子命令：BLAST 检索流程。"""
     try:
@@ -794,6 +827,10 @@ def main() -> int:
     parser_report.add_argument("--output", "-o", help="Output HTML file (default: report.html)")
     parser_report.add_argument("--title", help="Custom report title")
 
+    # inspect 子命令
+    parser_inspect = subparsers.add_parser("inspect", help="Inspect run metadata and diagnostics")
+    parser_inspect.add_argument("--input", "-i", required=True, help="Run directory containing metadata.json")
+
     args = parser.parse_args()
 
     # 初始化
@@ -820,6 +857,8 @@ def main() -> int:
         return cmd_search(args)
     elif args.command == "report":
         return cmd_report(args)
+    elif args.command == "inspect":
+        return cmd_inspect(args)
     else:
         parser.print_help(sys.stderr)
         return EXIT_ARGUMENT_ERROR

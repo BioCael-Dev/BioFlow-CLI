@@ -21,12 +21,15 @@ from bioflow.run_layout import (
     STEP_SKIPPED,
     STEP_SUCCESS,
     append_log,
+    build_failure_summary,
+    collect_input_details,
+    collect_tool_versions,
     create_run_layout,
     init_steps,
     read_metadata,
     resolve_result_path,
     set_step_state,
-    step_succeeded,
+    step_resume_ready,
     utc_now_iso,
     write_metadata,
 )
@@ -401,13 +404,22 @@ def run_alignment_pipeline(
     bai_path = output.with_suffix(output.suffix + ".bai")
     flagstat_path = layout.results_dir / f"{output.stem}.flagstat.txt"
     existing_metadata = read_metadata(layout)
+    tool_versions = collect_tool_versions(ALIGN_REQUIRED_TOOLS)
+    input_details = collect_input_details({"ref": ref, "reads": reads})
+    failure_summary = str(existing_metadata.get("failure_summary", ""))
     steps = init_steps(
         [ALIGN_STEP_INDEX, ALIGN_STEP_MAP, ALIGN_STEP_BAM_INDEX, ALIGN_STEP_FLAGSTAT],
         existing_metadata.get("steps"),
     )
 
     def persist(status: str, *, completed_at: str | None = None, stats: dict[str, int | float] | None = None) -> None:
-        extra: dict[str, object] = {"steps": steps, "resume_used": resume}
+        extra: dict[str, object] = {
+            "steps": steps,
+            "resume_used": resume,
+            "input_details": input_details,
+            "tool_versions": tool_versions,
+            "failure_summary": failure_summary,
+        }
         if stats is not None:
             extra["stats"] = stats
         write_metadata(
@@ -429,7 +441,12 @@ def run_alignment_pipeline(
     )
 
     bwa_index_files = _bwa_index_files(ref)
-    if resume and step_succeeded(steps, ALIGN_STEP_INDEX) and all(f.exists() for f in bwa_index_files):
+    if resume and step_resume_ready(
+        existing_metadata,
+        ALIGN_STEP_INDEX,
+        validator=lambda: all(f.exists() for f in bwa_index_files),
+        required_outputs=("index_files",),
+    ):
         set_step_state(steps, ALIGN_STEP_INDEX, STEP_SKIPPED, outputs={"index_files": [str(f) for f in bwa_index_files]}, note="reused existing output")
         persist("running")
         console.print(_format_step_label("1/4", "align_step_index_cached"), style="bold blue")
@@ -442,14 +459,20 @@ def run_alignment_pipeline(
         set_step_state(steps, ALIGN_STEP_INDEX, STEP_RUNNING)
         persist("running")
         if not _run_bwa_index(ref, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log):
-            set_step_state(steps, ALIGN_STEP_INDEX, STEP_FAILED, outputs={"index_files": [str(f) for f in bwa_index_files]})
+            failure_summary = build_failure_summary(ALIGN_STEP_INDEX, stderr_log=layout.stderr_log, fallback="BWA index failed")
+            set_step_state(steps, ALIGN_STEP_INDEX, STEP_FAILED, outputs={"index_files": [str(f) for f in bwa_index_files]}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return None
         set_step_state(steps, ALIGN_STEP_INDEX, STEP_SUCCESS, outputs={"index_files": [str(f) for f in bwa_index_files]})
         persist("running")
 
     console.print(_format_step_label("2/4", "align_step_map_sort"), style="bold blue")
-    if resume and step_succeeded(steps, ALIGN_STEP_MAP) and _is_nonempty_file(output):
+    if resume and step_resume_ready(
+        existing_metadata,
+        ALIGN_STEP_MAP,
+        validator=lambda: _is_nonempty_file(output),
+        required_outputs=("bam",),
+    ):
         set_step_state(steps, ALIGN_STEP_MAP, STEP_SKIPPED, outputs={"bam": str(output)}, note="reused existing output")
         persist("running")
     else:
@@ -463,28 +486,40 @@ def run_alignment_pipeline(
             stdout_log=layout.stdout_log,
             stderr_log=layout.stderr_log,
         ):
-            set_step_state(steps, ALIGN_STEP_MAP, STEP_FAILED, outputs={"bam": str(output)})
+            failure_summary = build_failure_summary(ALIGN_STEP_MAP, stderr_log=layout.stderr_log, fallback="Alignment failed")
+            set_step_state(steps, ALIGN_STEP_MAP, STEP_FAILED, outputs={"bam": str(output)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return None
         set_step_state(steps, ALIGN_STEP_MAP, STEP_SUCCESS, outputs={"bam": str(output)})
         persist("running")
 
     console.print(_format_step_label("3/4", "align_step_bam_index"), style="bold blue")
-    if resume and step_succeeded(steps, ALIGN_STEP_BAM_INDEX) and _is_nonempty_file(bai_path):
+    if resume and step_resume_ready(
+        existing_metadata,
+        ALIGN_STEP_BAM_INDEX,
+        validator=lambda: _is_nonempty_file(bai_path),
+        required_outputs=("bai",),
+    ):
         set_step_state(steps, ALIGN_STEP_BAM_INDEX, STEP_SKIPPED, outputs={"bai": str(bai_path)}, note="reused existing output")
         persist("running")
     else:
         set_step_state(steps, ALIGN_STEP_BAM_INDEX, STEP_RUNNING)
         persist("running")
         if not _run_samtools_index(output, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log):
-            set_step_state(steps, ALIGN_STEP_BAM_INDEX, STEP_FAILED, outputs={"bai": str(bai_path)})
+            failure_summary = build_failure_summary(ALIGN_STEP_BAM_INDEX, stderr_log=layout.stderr_log, fallback="BAM indexing failed")
+            set_step_state(steps, ALIGN_STEP_BAM_INDEX, STEP_FAILED, outputs={"bai": str(bai_path)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return None
         set_step_state(steps, ALIGN_STEP_BAM_INDEX, STEP_SUCCESS, outputs={"bai": str(bai_path)})
         persist("running")
 
     console.print(_format_step_label("4/4", "align_step_flagstat"), style="bold blue")
-    if resume and step_succeeded(steps, ALIGN_STEP_FLAGSTAT) and _flagstat_ready(flagstat_path):
+    if resume and step_resume_ready(
+        existing_metadata,
+        ALIGN_STEP_FLAGSTAT,
+        validator=lambda: _flagstat_ready(flagstat_path),
+        required_outputs=("flagstat",),
+    ):
         flagstat_text = flagstat_path.read_text(encoding="utf-8")
         set_step_state(steps, ALIGN_STEP_FLAGSTAT, STEP_SKIPPED, outputs={"flagstat": str(flagstat_path)}, note="reused existing output")
         persist("running")
@@ -493,7 +528,8 @@ def run_alignment_pipeline(
         persist("running")
         flagstat_text = _run_samtools_flagstat(output, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
         if flagstat_text is None:
-            set_step_state(steps, ALIGN_STEP_FLAGSTAT, STEP_FAILED, outputs={"flagstat": str(flagstat_path)})
+            failure_summary = build_failure_summary(ALIGN_STEP_FLAGSTAT, stderr_log=layout.stderr_log, fallback="flagstat failed")
+            set_step_state(steps, ALIGN_STEP_FLAGSTAT, STEP_FAILED, outputs={"flagstat": str(flagstat_path)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return None
         flagstat_path.write_text(flagstat_text, encoding="utf-8")
@@ -502,6 +538,7 @@ def run_alignment_pipeline(
 
     stats = parse_flagstat(flagstat_text)
     display_alignment_stats(stats)
+    failure_summary = ""
     persist("success", completed_at=utc_now_iso(), stats=stats)
 
     console.print(
