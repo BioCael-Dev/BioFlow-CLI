@@ -43,6 +43,7 @@ def test_inspect_run_collects_failed_steps_and_outputs(tmp_path: Path) -> None:
     assert payload["status"] == "failed"
     assert payload["failed_steps"][0]["name"] == "trimmomatic"
     assert payload["critical_outputs"][0]["exists"] is True
+    assert payload["failure_details"] == {}
     text = render_inspection_text(payload)
     assert "Failure Summary: trimmomatic: trim step failed" in text
     assert "stderr:" in text
@@ -64,7 +65,7 @@ def test_cmd_inspect_json_outputs_payload(tmp_path: Path, capsys) -> None:
         encoding="utf-8",
     )
 
-    exit_code = cli.cmd_inspect(Namespace(input=str(run_root), json=True))
+    exit_code = cli.cmd_inspect(Namespace(input=str(run_root), json=True, show_log=None))
 
     assert exit_code == cli.EXIT_SUCCESS
     payload = json.loads(capsys.readouterr().out)
@@ -77,6 +78,30 @@ def test_cmd_inspect_rejects_missing_metadata(tmp_path: Path) -> None:
     run_root = tmp_path / "runs" / "empty"
     run_root.mkdir(parents=True, exist_ok=True)
 
-    exit_code = cli.cmd_inspect(Namespace(input=str(run_root), json=False))
+    exit_code = cli.cmd_inspect(Namespace(input=str(run_root), json=False, show_log=None))
 
     assert exit_code == cli.EXIT_ARGUMENT_ERROR
+
+
+def test_inspect_show_log_tail_reads_stderr(tmp_path: Path) -> None:
+    run_root = tmp_path / "runs" / "align-001"
+    logs_dir = run_root / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    stderr_log = logs_dir / "align.stderr.log"
+    stderr_log.write_text("line1\nline2\nline3\n", encoding="utf-8")
+    (run_root / "metadata.json").write_text(
+        json.dumps(
+            {
+                "workflow": "align",
+                "status": "failed",
+                "started_at": "2026-04-21T00:00:00+00:00",
+                "logs": {"stderr": str(stderr_log), "stdout": str(logs_dir / "align.stdout.log")},
+                "outputs": {},
+                "steps": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = inspect_run(run_root, show_log="tail")
+    assert payload["stderr_tail"] == "line1\nline2\nline3"

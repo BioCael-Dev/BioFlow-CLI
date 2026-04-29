@@ -144,6 +144,7 @@ STRINGS = {
     "report_section_tools": "工具版本",
     "report_section_logs": "日志路径",
     "report_section_diagnostics": "诊断摘要",
+    "report_section_failure_details": "失败详情",
     "report_section_steps": "执行步骤",
     "report_field_workflow": "工作流",
     "report_field_version": "版本",

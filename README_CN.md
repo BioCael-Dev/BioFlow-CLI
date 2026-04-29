@@ -31,6 +31,7 @@ BioFlow-CLI 是一个基于 **MIT 许可证** 发布的 **开源项目**。
 - **QC 流程** — 集成 FastQC + Trimmomatic 的质量控制流水线
 - **运行检查** — 提供 `bioflow inspect`，可汇总运行状态、关键输出、失败步骤与日志位置
 - **HTML 运行报告** — 可将单次或多次工作流运行导出为单文件 HTML 汇总报告
+- **失败诊断** — 为失败的 workflow 提供统一 CLI 诊断输出，包括失败步骤、失败命令、stderr 摘要和日志路径
 - **YAML 工作流配置** — 可通过配置文件复用 QC / 比对 / 检索参数
 - **结构化输出** — 支持 `--json` 输出，便于自动化集成和脚本调用
 - **标准退出码** — 提供统一的成功 / 参数错误 / 运行时错误 / 依赖缺失状态码
@@ -179,6 +180,9 @@ bioflow inspect --input runs/qc-001
 # JSON 模式运行检查
 bioflow --json inspect --input runs/qc-001
 
+# 检查时同时显示最新 stderr 摘要
+bioflow inspect --input runs/qc-001 --show-log tail
+
 # 列出生物工具安装状态
 bioflow env --list
 
@@ -237,14 +241,21 @@ bioflow --json batch -i ./data -o ./formatted
 #### 运行检查
 
 - `bioflow inspect --input <run_dir>` 可输出运行状态、关键输出、失败步骤和日志路径
+- `bioflow inspect --input <run_dir> --show-log tail` 可同时输出 stderr 最后若干行，便于快速排障
 - `bioflow --json inspect --input <run_dir>` 可输出结构化诊断结果，便于脚本集成
 - 旧版运行目录仍可读取，不要求必须包含所有新字段
+
+#### 失败诊断
+
+- 失败的 `qc`、`align`、`search` 现在会输出统一 CLI 诊断块
+- 诊断块包含失败步骤、失败命令、stdout/stderr 日志路径和 stderr 摘要
+- 同一份诊断信息也会写入 `metadata.json` 的 `failure_details`
 
 #### HTML 报告导出
 
 - `bioflow report --input <run_dir>` 可基于 `metadata.json` 导出单次运行报告
 - `bioflow report --input <parent_dir>` 会扫描其一级子目录并合并多次运行结果
-- 生成的报告包含运行摘要、输入详情、运行环境、工具版本、日志路径、失败摘要以及步骤状态表
+- 生成的报告包含运行摘要、输入详情、运行环境、工具版本、日志路径、失败摘要、失败详情以及步骤状态表
 - TUI 主菜单也已提供报告导出入口
 
 #### 批量并发
@@ -271,7 +282,7 @@ pip install -e .[dev]
 
 ## 项目状态
 
-当前开发版本：**v0.6.0**
+当前开发版本：**v0.6.1**
 
 ## 许可证
 

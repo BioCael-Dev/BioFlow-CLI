@@ -20,6 +20,7 @@ from bioflow.run_layout import (
     STEP_SKIPPED,
     STEP_SUCCESS,
     append_log,
+    build_failure_details,
     build_failure_summary,
     collect_input_details,
     collect_tool_versions,
@@ -323,6 +324,7 @@ def run_blast_search(
     tool_versions = collect_tool_versions(SEARCH_REQUIRED_TOOLS)
     input_details = collect_input_details({"db": db_fasta, "query": query_fasta})
     failure_summary = str(existing_metadata.get("failure_summary", ""))
+    failure_details = existing_metadata.get("failure_details", {})
     steps = init_steps(
         [SEARCH_STEP_DB, SEARCH_STEP_BLASTN, SEARCH_STEP_SUMMARY],
         existing_metadata.get("steps"),
@@ -335,6 +337,7 @@ def run_blast_search(
             "input_details": input_details,
             "tool_versions": tool_versions,
             "failure_summary": failure_summary,
+            "failure_details": failure_details,
         }
         if summary is not None:
             extra["summary"] = summary
@@ -388,6 +391,12 @@ def run_blast_search(
             stderr_log=layout.stderr_log,
         ):
             failure_summary = build_failure_summary(SEARCH_STEP_DB, stderr_log=layout.stderr_log, fallback="makeblastdb failed")
+            failure_details = build_failure_details(
+                step_name=SEARCH_STEP_DB,
+                command=f"makeblastdb -in {db_fasta} -dbtype nucl",
+                layout=layout,
+                error=failure_summary,
+            )
             set_step_state(steps, SEARCH_STEP_DB, STEP_FAILED, outputs={"db": str(db_fasta)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return None
@@ -423,6 +432,12 @@ def run_blast_search(
                 stderr_log=layout.stderr_log,
             ):
                 failure_summary = build_failure_summary(SEARCH_STEP_BLASTN, stderr_log=layout.stderr_log, fallback="blastn failed")
+                failure_details = build_failure_details(
+                    step_name=SEARCH_STEP_BLASTN,
+                    command=f"blastn -query {query_fasta} -db {db_fasta} -out {output} -outfmt 6 -evalue {evalue} -max_target_seqs {max_target_seqs}",
+                    layout=layout,
+                    error=failure_summary,
+                )
                 set_step_state(steps, SEARCH_STEP_BLASTN, STEP_FAILED, outputs={"tsv": str(output)}, error=failure_summary)
                 persist("failed", completed_at=utc_now_iso())
                 return None
@@ -443,6 +458,12 @@ def run_blast_search(
             stderr_log=layout.stderr_log,
         ):
             failure_summary = build_failure_summary(SEARCH_STEP_BLASTN, stderr_log=layout.stderr_log, fallback="blastn failed")
+            failure_details = build_failure_details(
+                step_name=SEARCH_STEP_BLASTN,
+                command=f"blastn -query {query_fasta} -db {db_fasta} -out {output} -outfmt 6 -evalue {evalue} -max_target_seqs {max_target_seqs}",
+                layout=layout,
+                error=failure_summary,
+            )
             set_step_state(steps, SEARCH_STEP_BLASTN, STEP_FAILED, outputs={"tsv": str(output)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return None
@@ -473,6 +494,7 @@ def run_blast_search(
         display_search_summary(summary)
 
     failure_summary = ""
+    failure_details = {}
     persist("success", completed_at=utc_now_iso(), summary=summary)
 
     return {

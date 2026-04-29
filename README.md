@@ -36,6 +36,7 @@ License text: [MIT License](LICENSE)
 - **QC Pipeline**: Integrated FastQC + Trimmomatic workflow
 - **Run Inspection**: `bioflow inspect` summarizes run status, critical outputs, failed steps, and log locations
 - **HTML Run Reports**: Export one or more workflow runs into a portable single-file HTML summary
+- **Failure Diagnostics**: Unified failure output across workflows with failed step, failed command, stderr tail, and direct log paths
 - **YAML Workflow Config**: run QC / alignment / search from reusable config files
 - **Structured Output**: `--json` output for automation pipelines
 - **Stable Exit Codes**: standardized success/error/dependency signaling
@@ -136,6 +137,9 @@ bioflow inspect --input runs/qc-001
 # Inspect in JSON mode for automation
 bioflow --json inspect --input runs/qc-001
 
+# Show the latest stderr tail during inspection
+bioflow inspect --input runs/qc-001 --show-log tail
+
 # List tool status
 bioflow env --list
 
@@ -196,14 +200,21 @@ bioflow --json batch -i ./data -o ./formatted
 ### Run Inspection
 
 - `bioflow inspect --input <run_dir>` prints workflow status, critical outputs, failed steps, and log paths
+- `bioflow inspect --input <run_dir> --show-log tail` includes the latest stderr tail for faster triage
 - `bioflow --json inspect --input <run_dir>` emits structured diagnostics for scripts
 - old run directories remain readable even if they predate the enhanced metadata schema
+
+### Failure Diagnostics
+
+- failed `qc`, `align`, and `search` runs now print a unified CLI diagnostic block
+- the block includes failed step, failed command, stdout log path, stderr log path, and stderr tail
+- the same diagnostics are persisted in `metadata.json` under `failure_details`
 
 ### HTML Reports
 
 - `bioflow report --input <run_dir>` exports a single-run HTML report from `metadata.json`
 - `bioflow report --input <parent_dir>` scans immediate subdirectories and combines multiple runs into one report
-- the generated report includes workflow summary, input details, runtime environment, tool versions, logs, failure summary, and per-step status
+- the generated report includes workflow summary, input details, runtime environment, tool versions, logs, failure summary, failure details, and per-step status
 - TUI mode also exposes report export from the main menu
 
 ### Batch Concurrency
@@ -230,7 +241,7 @@ pip install -e .[dev]
 
 ## Project Status
 
-Current development version: **v0.6.0**
+Current development version: **v0.6.1**
 
 Release history and notes: [GitHub Releases](https://github.com/BioCael-Dev/BioFlow-CLI/releases)
 

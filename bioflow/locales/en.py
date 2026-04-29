@@ -144,6 +144,7 @@ STRINGS = {
     "report_section_tools": "Tool Versions",
     "report_section_logs": "Logs",
     "report_section_diagnostics": "Diagnostics",
+    "report_section_failure_details": "Failure Details",
     "report_section_steps": "Steps",
     "report_field_workflow": "Workflow",
     "report_field_version": "Version",

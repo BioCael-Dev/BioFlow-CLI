@@ -27,6 +27,7 @@ from bioflow.inspect import inspect_run, render_inspection_text
 from bioflow.pipeline import run_qc_pipeline
 from bioflow.preflight import PreflightError
 from bioflow.report import generate_report
+from bioflow.run_layout import format_failure_diagnostics
 from bioflow.search import run_blast_search
 
 # 退出码标准
@@ -100,6 +101,16 @@ def _merge_workflow_args(
     if config_path is not None:
         merged["config"] = str(config_path)
     return merged
+
+
+def _print_failure_diagnostics(metadata_path: Path, *, as_json: bool) -> None:
+    """从 metadata.json 读取并打印统一失败诊断。"""
+    if as_json or not metadata_path.exists():
+        return
+    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    details = payload.get("failure_details")
+    if isinstance(details, dict):
+        console_err.print(format_failure_diagnostics(details), style="bold red")
 
 
 def cmd_seq(args: argparse.Namespace) -> int:
@@ -444,6 +455,8 @@ def cmd_qc(args: argparse.Namespace) -> int:
                 print(json.dumps(payload, ensure_ascii=False))
             return EXIT_SUCCESS
         else:
+            metadata_path = Path(str(outdir or output_dir or _default_workflow_outdir("qc", input_path))) / "metadata.json"
+            _print_failure_diagnostics(metadata_path, as_json=args.json)
             return EXIT_RUNTIME_ERROR
     except PreflightError as exc:
         if args.json:
@@ -541,6 +554,8 @@ def cmd_align(args: argparse.Namespace) -> int:
                 print(json.dumps(payload, ensure_ascii=False))
             return EXIT_SUCCESS
         else:
+            metadata_path = (outdir or _default_workflow_outdir("align", input_path)) / "metadata.json"
+            _print_failure_diagnostics(metadata_path, as_json=args.json)
             return EXIT_RUNTIME_ERROR
     except PreflightError as exc:
         if args.json:
@@ -612,7 +627,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         return EXIT_ARGUMENT_ERROR
 
     try:
-        payload = inspect_run(input_path)
+        payload = inspect_run(input_path, show_log=getattr(args, "show_log", None))
         if args.json:
             print(json.dumps({"status": "success", **payload}, ensure_ascii=False))
         else:
@@ -730,6 +745,8 @@ def cmd_search(args: argparse.Namespace) -> int:
             cli_mode=True,
         )
         if result is None:
+            metadata_path = (outdir or _default_workflow_outdir("search", query_path)) / "metadata.json"
+            _print_failure_diagnostics(metadata_path, as_json=args.json)
             return EXIT_RUNTIME_ERROR
         if args.json:
             print(json.dumps({"status": "success", **result}, ensure_ascii=False))
@@ -830,6 +847,7 @@ def main() -> int:
     # inspect 子命令
     parser_inspect = subparsers.add_parser("inspect", help="Inspect run metadata and diagnostics")
     parser_inspect.add_argument("--input", "-i", required=True, help="Run directory containing metadata.json")
+    parser_inspect.add_argument("--show-log", choices=["tail"], help="Show stderr log tail")
 
     args = parser.parse_args()
 

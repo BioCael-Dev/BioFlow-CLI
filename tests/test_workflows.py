@@ -135,6 +135,21 @@ def test_search_run_cmd_retains_failure_logs(tmp_path: Path, monkeypatch) -> Non
     assert "partial stderr" in stderr_log.read_text(encoding="utf-8")
 
 
+def test_qc_failure_writes_failure_details(tmp_path: Path, monkeypatch) -> None:
+    reads = tmp_path / "reads.fastq"
+    reads.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
+    run_root = tmp_path / "runs" / "qc-fail"
+
+    monkeypatch.setattr(pipeline, "_run_fastqc", lambda *args, **kwargs: False)
+
+    assert pipeline.run_qc_pipeline(reads, outdir=run_root, skip_preflight=True) is False
+    metadata = json.loads((run_root / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["status"] == "failed"
+    assert metadata["failure_details"]["failed_step"] == "fastqc_pre"
+    assert "fastqc" in metadata["failure_details"]["failed_command"]
+    assert metadata["failure_details"]["stderr_log"].endswith("qc.stderr.log")
+
+
 def test_cmd_qc_json_reports_outdir(tmp_path: Path, monkeypatch, capsys) -> None:
     reads = tmp_path / "reads.fastq"
     reads.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
@@ -400,3 +415,46 @@ def test_cmd_search_json_reports_resume_used(tmp_path: Path, monkeypatch, capsys
     assert exit_code == cli.EXIT_SUCCESS
     payload = json.loads(capsys.readouterr().out)
     assert payload["resume_used"] is True
+
+
+def test_cmd_search_failure_prints_diagnostics(tmp_path: Path, monkeypatch, capsys) -> None:
+    db = tmp_path / "ref.fa"
+    query = tmp_path / "query.fa"
+    db.write_text(">ref\nACGT\n", encoding="utf-8")
+    query.write_text(">q1\nACGT\n", encoding="utf-8")
+    run_root = tmp_path / "runs" / "search-fail"
+    run_root.mkdir(parents=True, exist_ok=True)
+    (run_root / "metadata.json").write_text(
+        json.dumps(
+            {
+                "failure_details": {
+                    "failed_step": "blastn",
+                    "failed_command": "blastn -query query.fa -db ref.fa",
+                    "stdout_log": str(run_root / "logs" / "search.stdout.log"),
+                    "stderr_log": str(run_root / "logs" / "search.stderr.log"),
+                    "stderr_tail": "mock tail",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "run_blast_search", lambda *args, **kwargs: None)
+
+    exit_code = cli.cmd_search(
+        Namespace(
+            quiet=False,
+            json=False,
+            config=None,
+            db=str(db),
+            query=str(query),
+            output=None,
+            outdir=str(run_root),
+            evalue=10.0,
+            max_target_seqs=10,
+            top=5,
+            resume=False,
+        )
+    )
+
+    assert exit_code == cli.EXIT_RUNTIME_ERROR
+    assert "Failed Step: blastn" in capsys.readouterr().err

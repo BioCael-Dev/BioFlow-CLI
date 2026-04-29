@@ -180,6 +180,26 @@ def build_failure_summary(
     return step_name
 
 
+def build_failure_details(
+    *,
+    step_name: str,
+    command: str,
+    layout: RunLayout,
+    error: str = "",
+    stderr_lines: int = 8,
+) -> dict[str, Any]:
+    """构建统一的失败诊断 payload。"""
+    stderr_tail = read_log_tail(layout.stderr_log, lines=stderr_lines)
+    return {
+        "failed_step": step_name,
+        "failed_command": command,
+        "stdout_log": str(layout.stdout_log),
+        "stderr_log": str(layout.stderr_log),
+        "stderr_tail": stderr_tail,
+        "error": error,
+    }
+
+
 def metadata_supports_resume(metadata: dict[str, Any], step_name: str) -> bool:
     """判断 metadata 是否足够支撑 resume 判断。"""
     if not isinstance(metadata, dict):
@@ -366,4 +386,18 @@ def write_metadata(
     layout.metadata_path.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False),
         encoding="utf-8",
+    )
+
+
+def format_failure_diagnostics(details: dict[str, Any]) -> str:
+    """格式化 CLI 失败诊断输出。"""
+    stderr_tail = str(details.get("stderr_tail", "")).strip() or "-"
+    return "\n".join(
+        [
+            f"Failed Step: {details.get('failed_step', '-')}",
+            f"Failed Command: {details.get('failed_command', '-')}",
+            f"stdout log: {details.get('stdout_log', '-')}",
+            f"stderr log: {details.get('stderr_log', '-')}",
+            f"stderr tail:\n{stderr_tail}",
+        ]
     )

@@ -21,6 +21,7 @@ from bioflow.run_layout import (
     STEP_SKIPPED,
     STEP_SUCCESS,
     append_log,
+    build_failure_details,
     build_failure_summary,
     collect_input_details,
     collect_tool_versions,
@@ -407,6 +408,7 @@ def run_alignment_pipeline(
     tool_versions = collect_tool_versions(ALIGN_REQUIRED_TOOLS)
     input_details = collect_input_details({"ref": ref, "reads": reads})
     failure_summary = str(existing_metadata.get("failure_summary", ""))
+    failure_details = existing_metadata.get("failure_details", {})
     steps = init_steps(
         [ALIGN_STEP_INDEX, ALIGN_STEP_MAP, ALIGN_STEP_BAM_INDEX, ALIGN_STEP_FLAGSTAT],
         existing_metadata.get("steps"),
@@ -419,6 +421,7 @@ def run_alignment_pipeline(
             "input_details": input_details,
             "tool_versions": tool_versions,
             "failure_summary": failure_summary,
+            "failure_details": failure_details,
         }
         if stats is not None:
             extra["stats"] = stats
@@ -460,6 +463,12 @@ def run_alignment_pipeline(
         persist("running")
         if not _run_bwa_index(ref, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log):
             failure_summary = build_failure_summary(ALIGN_STEP_INDEX, stderr_log=layout.stderr_log, fallback="BWA index failed")
+            failure_details = build_failure_details(
+                step_name=ALIGN_STEP_INDEX,
+                command=f"bwa index {ref}",
+                layout=layout,
+                error=failure_summary,
+            )
             set_step_state(steps, ALIGN_STEP_INDEX, STEP_FAILED, outputs={"index_files": [str(f) for f in bwa_index_files]}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return None
@@ -487,6 +496,12 @@ def run_alignment_pipeline(
             stderr_log=layout.stderr_log,
         ):
             failure_summary = build_failure_summary(ALIGN_STEP_MAP, stderr_log=layout.stderr_log, fallback="Alignment failed")
+            failure_details = build_failure_details(
+                step_name=ALIGN_STEP_MAP,
+                command=f"bwa mem -t {threads} {ref} {reads} | samtools view -bS -@ {threads} - | samtools sort -@ {threads} -o {output} -",
+                layout=layout,
+                error=failure_summary,
+            )
             set_step_state(steps, ALIGN_STEP_MAP, STEP_FAILED, outputs={"bam": str(output)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return None
@@ -507,6 +522,12 @@ def run_alignment_pipeline(
         persist("running")
         if not _run_samtools_index(output, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log):
             failure_summary = build_failure_summary(ALIGN_STEP_BAM_INDEX, stderr_log=layout.stderr_log, fallback="BAM indexing failed")
+            failure_details = build_failure_details(
+                step_name=ALIGN_STEP_BAM_INDEX,
+                command=f"samtools index {output}",
+                layout=layout,
+                error=failure_summary,
+            )
             set_step_state(steps, ALIGN_STEP_BAM_INDEX, STEP_FAILED, outputs={"bai": str(bai_path)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return None
@@ -529,6 +550,12 @@ def run_alignment_pipeline(
         flagstat_text = _run_samtools_flagstat(output, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
         if flagstat_text is None:
             failure_summary = build_failure_summary(ALIGN_STEP_FLAGSTAT, stderr_log=layout.stderr_log, fallback="flagstat failed")
+            failure_details = build_failure_details(
+                step_name=ALIGN_STEP_FLAGSTAT,
+                command=f"samtools flagstat {output}",
+                layout=layout,
+                error=failure_summary,
+            )
             set_step_state(steps, ALIGN_STEP_FLAGSTAT, STEP_FAILED, outputs={"flagstat": str(flagstat_path)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return None
@@ -539,6 +566,7 @@ def run_alignment_pipeline(
     stats = parse_flagstat(flagstat_text)
     display_alignment_stats(stats)
     failure_summary = ""
+    failure_details = {}
     persist("success", completed_at=utc_now_iso(), stats=stats)
 
     console.print(

@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from bioflow.run_layout import read_log_tail
+
 
 def _load_metadata(run_dir: Path) -> dict[str, Any]:
     """Load metadata.json from a run directory."""
@@ -45,7 +47,7 @@ def _collect_output_paths(value: Any, prefix: str = "") -> list[dict[str, Any]]:
     return items
 
 
-def inspect_run(run_dir: Path) -> dict[str, Any]:
+def inspect_run(run_dir: Path, *, show_log: str | None = None) -> dict[str, Any]:
     """Inspect a single BioFlow run directory."""
     metadata = _load_metadata(run_dir)
     steps = metadata.get("steps", {})
@@ -63,6 +65,10 @@ def inspect_run(run_dir: Path) -> dict[str, Any]:
 
     logs = metadata.get("logs", {})
     outputs = metadata.get("outputs", {})
+    failure_details = metadata.get("failure_details", {})
+    stderr_tail = ""
+    if show_log == "tail" and isinstance(logs, dict) and logs.get("stderr"):
+        stderr_tail = read_log_tail(Path(str(logs["stderr"])), lines=20)
     return {
         "run_dir": str(run_dir),
         "metadata": str(run_dir / "metadata.json"),
@@ -74,6 +80,7 @@ def inspect_run(run_dir: Path) -> dict[str, Any]:
         "completed_at": metadata.get("completed_at"),
         "resume_used": bool(metadata.get("resume_used", False)),
         "failure_summary": metadata.get("failure_summary", ""),
+        "failure_details": failure_details if isinstance(failure_details, dict) else {},
         "runtime": metadata.get("runtime", {}),
         "tool_versions": metadata.get("tool_versions", {}),
         "input_details": metadata.get("input_details", {}),
@@ -84,6 +91,7 @@ def inspect_run(run_dir: Path) -> dict[str, Any]:
         "critical_outputs": _collect_output_paths(outputs),
         "failed_steps": failed_steps,
         "steps": steps if isinstance(steps, dict) else {},
+        "stderr_tail": stderr_tail,
     }
 
 
@@ -130,5 +138,10 @@ def render_inspection_text(payload: dict[str, Any]) -> str:
         for item in failed_steps:
             detail = item.get("error") or item.get("note") or "-"
             lines.append(f"  {item['name']}: {detail}")
+
+    stderr_tail = payload.get("stderr_tail") or ""
+    if stderr_tail:
+        lines.append("stderr tail:")
+        lines.append(stderr_tail)
 
     return "\n".join(lines)

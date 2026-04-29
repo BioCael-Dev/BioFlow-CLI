@@ -19,6 +19,7 @@ from bioflow.run_layout import (
     STEP_SKIPPED,
     STEP_SUCCESS,
     append_log,
+    build_failure_details,
     build_failure_summary,
     collect_input_details,
     collect_tool_versions,
@@ -172,6 +173,7 @@ def run_qc_pipeline(
     tool_versions = collect_tool_versions(QC_REQUIRED_TOOLS)
     input_details = collect_input_details({"input": input_file})
     failure_summary = str(existing_metadata.get("failure_summary", ""))
+    failure_details = existing_metadata.get("failure_details", {})
     steps = init_steps(
         [QC_STEP_FASTQC_PRE, QC_STEP_TRIM, QC_STEP_FASTQC_POST],
         existing_metadata.get("steps"),
@@ -198,6 +200,7 @@ def run_qc_pipeline(
                 "input_details": input_details,
                 "tool_versions": tool_versions,
                 "failure_summary": failure_summary,
+                "failure_details": failure_details,
             },
         )
 
@@ -222,6 +225,12 @@ def run_qc_pipeline(
         persist("running")
         if not _run_fastqc(input_file, fastqc_pre_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log):
             failure_summary = build_failure_summary(QC_STEP_FASTQC_PRE, stderr_log=layout.stderr_log, fallback="FastQC failed")
+            failure_details = build_failure_details(
+                step_name=QC_STEP_FASTQC_PRE,
+                command=f"fastqc {input_file} -o {fastqc_pre_dir} --quiet",
+                layout=layout,
+                error=failure_summary,
+            )
             set_step_state(steps, QC_STEP_FASTQC_PRE, STEP_FAILED, outputs={"dir": str(fastqc_pre_dir)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return False
@@ -252,6 +261,20 @@ def run_qc_pipeline(
             stderr_log=layout.stderr_log,
         ):
             failure_summary = build_failure_summary(QC_STEP_TRIM, stderr_log=layout.stderr_log, fallback="Trimmomatic failed")
+            trim_parts = [
+                "trimmomatic SE -phred33",
+                str(input_file),
+                str(trimmed_file),
+            ]
+            if adapter:
+                trim_parts.append(f"ILLUMINACLIP:{adapter}:2:30:10")
+            trim_parts.extend(["LEADING:3", "TRAILING:3", "SLIDINGWINDOW:4:15", f"MINLEN:{minlen}"])
+            failure_details = build_failure_details(
+                step_name=QC_STEP_TRIM,
+                command=" ".join(trim_parts),
+                layout=layout,
+                error=failure_summary,
+            )
             set_step_state(steps, QC_STEP_TRIM, STEP_FAILED, outputs={"trimmed": str(trimmed_file)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return False
@@ -273,12 +296,19 @@ def run_qc_pipeline(
         persist("running")
         if not _run_fastqc(trimmed_file, fastqc_post_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log):
             failure_summary = build_failure_summary(QC_STEP_FASTQC_POST, stderr_log=layout.stderr_log, fallback="FastQC failed")
+            failure_details = build_failure_details(
+                step_name=QC_STEP_FASTQC_POST,
+                command=f"fastqc {trimmed_file} -o {fastqc_post_dir} --quiet",
+                layout=layout,
+                error=failure_summary,
+            )
             set_step_state(steps, QC_STEP_FASTQC_POST, STEP_FAILED, outputs={"dir": str(fastqc_post_dir)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return False
         set_step_state(steps, QC_STEP_FASTQC_POST, STEP_SUCCESS, outputs={"dir": str(fastqc_post_dir)})
 
     failure_summary = ""
+    failure_details = {}
     persist("success", completed_at=utc_now_iso())
     console.print(
         t("qc_pipeline_done", output=str(layout.root)), style="bold green"

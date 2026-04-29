@@ -41,6 +41,7 @@ class RunInfo:
     tool_versions: dict[str, Any]
     input_details: dict[str, Any]
     failure_summary: str
+    failure_details: dict[str, Any]
 
 
 def parse_metadata(run_dir: Path) -> RunInfo:
@@ -80,6 +81,7 @@ def parse_metadata(run_dir: Path) -> RunInfo:
         tool_versions=data.get("tool_versions", {}),
         input_details=data.get("input_details", {}),
         failure_summary=data.get("failure_summary", ""),
+        failure_details=data.get("failure_details", {}),
     )
 
 
@@ -243,6 +245,13 @@ def _render_run_card(run: RunInfo) -> str:
             [
                 f'<div class="section-title">{_esc(t("report_section_diagnostics"))}</div>',
                 f"<p>{_esc(run.failure_summary)}</p>",
+            ]
+        )
+    if run.failure_details:
+        sections.extend(
+            [
+                f'<div class="section-title">{_esc(t("report_section_failure_details"))}</div>',
+                _render_kv_table(run.failure_details),
             ]
         )
     sections.append("</div>")
