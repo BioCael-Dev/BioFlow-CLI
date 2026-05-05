@@ -167,12 +167,19 @@ def _status_class(status: str) -> str:
     return f"status-{status}" if status in ("success", "failed", "pending", "skipped", "running") else ""
 
 
+def _format_report_value(value: Any) -> str:
+    """格式化报告中的值，嵌套结构输出为 JSON。"""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
+    return str(value)
+
+
 def _render_kv_table(data: dict[str, Any]) -> str:
     """Render a simple key-value dictionary as an HTML table."""
     if not data:
         return "<p>-</p>"
     rows = "".join(
-        f"<tr><td>{_esc(k)}</td><td>{_esc(v)}</td></tr>" for k, v in data.items()
+        f"<tr><td>{_esc(k)}</td><td><pre>{_esc(_format_report_value(v))}</pre></td></tr>" for k, v in data.items()
     )
     return f"<table><tr><th>{_esc(t('report_col_key'))}</th><th>{_esc(t('report_col_value'))}</th></tr>{rows}</table>"
 

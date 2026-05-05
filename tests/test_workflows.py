@@ -6,7 +6,9 @@ from pathlib import Path
 import bioflow.alignment as alignment
 import bioflow.cli as cli
 import bioflow.pipeline as pipeline
+import bioflow.report as report
 import bioflow.search as search
+from bioflow.config import ConfigError, load_workflow_config
 
 
 def test_qc_pipeline_uses_standard_outdir(tmp_path: Path, monkeypatch) -> None:
@@ -75,6 +77,107 @@ def test_alignment_pipeline_writes_results_and_metadata(tmp_path: Path, monkeypa
     assert metadata["status"] == "success"
     assert metadata["stats"]["mapped"] == 8
     assert "bwa" in metadata["tool_versions"]
+
+
+def test_qc_pipeline_paired_end_writes_results_and_metadata(tmp_path: Path, monkeypatch) -> None:
+    reads_r1 = tmp_path / "reads_1.fastq"
+    reads_r2 = tmp_path / "reads_2.fastq"
+    reads_r1.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
+    reads_r2.write_text("@r1\nTGCA\n+\n!!!!\n", encoding="utf-8")
+    run_root = tmp_path / "runs" / "qc-pe-001"
+    fastqc_calls: list[str] = []
+
+    def fake_fastqc(input_file: Path, output_dir: Path, **_: object) -> bool:
+        fastqc_calls.append(input_file.name)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / f"{input_file.stem}_fastqc.html").write_text("ok", encoding="utf-8")
+        return True
+
+    def fake_trimmomatic_pe(
+        input_r1: Path,
+        input_r2: Path,
+        output_r1_paired: Path,
+        output_r1_unpaired: Path,
+        output_r2_paired: Path,
+        output_r2_unpaired: Path,
+        **_: object,
+    ) -> bool:
+        output_r1_paired.write_text(input_r1.read_text(encoding="utf-8"), encoding="utf-8")
+        output_r2_paired.write_text(input_r2.read_text(encoding="utf-8"), encoding="utf-8")
+        output_r1_unpaired.write_text("", encoding="utf-8")
+        output_r2_unpaired.write_text("", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(pipeline, "_run_fastqc", fake_fastqc)
+    monkeypatch.setattr(pipeline, "_run_trimmomatic_pe", fake_trimmomatic_pe)
+
+    assert pipeline.run_qc_pipeline(None, input_r1=reads_r1, input_r2=reads_r2, outdir=run_root, skip_preflight=True) is True
+    assert fastqc_calls == ["reads_1.fastq", "reads_2.fastq", "reads_1.paired.fastq", "reads_2.paired.fastq"]
+
+    metadata = json.loads((run_root / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["status"] == "success"
+    assert metadata["parameters"]["paired"] is True
+    assert metadata["inputs"]["input_r1"].endswith("reads_1.fastq")
+    assert metadata["inputs"]["input_r2"].endswith("reads_2.fastq")
+    assert metadata["outputs"]["trimmed_r1"].endswith("reads_1.paired.fastq")
+    assert metadata["outputs"]["trimmed_r2"].endswith("reads_2.paired.fastq")
+    assert metadata["outputs"]["unpaired_r1"].endswith("reads_1.unpaired.fastq")
+    assert metadata["outputs"]["unpaired_r2"].endswith("reads_2.unpaired.fastq")
+    assert metadata["input_details"]["input_r1"]["sha256"]
+    assert metadata["input_details"]["input_r2"]["sha256"]
+
+
+def test_alignment_pipeline_paired_end_writes_results_and_metadata(tmp_path: Path, monkeypatch) -> None:
+    ref = tmp_path / "ref.fa"
+    reads_r1 = tmp_path / "reads_1.fastq"
+    reads_r2 = tmp_path / "reads_2.fastq"
+    ref.write_text(">ref\nACGT\n", encoding="utf-8")
+    reads_r1.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
+    reads_r2.write_text("@r1\nTGCA\n+\n!!!!\n", encoding="utf-8")
+    run_root = tmp_path / "runs" / "align-pe-001"
+    map_calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(alignment, "_run_bwa_index", lambda *args, **kwargs: True)
+
+    def fake_map(_ref: Path, input_r1: Path, input_r2: Path, output_bam: Path, **_: object) -> bool:
+        map_calls.append((input_r1.name, input_r2.name))
+        output_bam.write_text("bam", encoding="utf-8")
+        return True
+
+    def fake_index(bam: Path, **_: object) -> bool:
+        bam.with_suffix(bam.suffix + ".bai").write_text("bai", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(alignment, "_run_bwa_mem_pipe_sort_pe", fake_map)
+    monkeypatch.setattr(alignment, "_run_samtools_index", fake_index)
+    monkeypatch.setattr(
+        alignment,
+        "_run_samtools_flagstat",
+        lambda *args, **kwargs: (
+            "20 + 0 in total (QC-passed reads + QC-failed reads)\n"
+            "18 + 0 mapped (90.00% : N/A)\n"
+            "20 + 0 paired in sequencing\n"
+            "16 + 0 properly paired (80.00% : N/A)\n"
+        ),
+    )
+    monkeypatch.setattr(alignment, "display_alignment_stats", lambda stats: None)
+
+    stats = alignment.run_alignment_pipeline(ref, None, input_r1=reads_r1, input_r2=reads_r2, outdir=run_root, skip_preflight=True)
+
+    assert stats is not None
+    assert map_calls == [("reads_1.fastq", "reads_2.fastq")]
+    assert stats["paired"] == 20
+    assert stats["properly_paired"] == 16
+
+    metadata = json.loads((run_root / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["status"] == "success"
+    assert metadata["parameters"]["paired"] is True
+    assert metadata["inputs"]["input_r1"].endswith("reads_1.fastq")
+    assert metadata["inputs"]["input_r2"].endswith("reads_2.fastq")
+    assert metadata["outputs"]["bam"].endswith("reads_1.sorted.bam")
+    assert metadata["outputs"]["bai"].endswith("reads_1.sorted.bam.bai")
+    assert metadata["stats"]["paired"] == 20
+    assert metadata["stats"]["properly_paired"] == 16
 
 
 def test_search_pipeline_generates_summary_and_metadata(tmp_path: Path, monkeypatch) -> None:
@@ -252,6 +355,76 @@ def test_qc_resume_recomputes_invalid_trimmed_output(tmp_path: Path, monkeypatch
     assert calls["post"] == 1
 
 
+def test_qc_resume_recomputes_invalid_paired_outputs(tmp_path: Path, monkeypatch) -> None:
+    reads_r1 = tmp_path / "reads_1.fastq"
+    reads_r2 = tmp_path / "reads_2.fastq"
+    reads_r1.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
+    reads_r2.write_text("@r1\nTGCA\n+\n!!!!\n", encoding="utf-8")
+    run_root = tmp_path / "runs" / "qc-pe-002"
+    pre_dir = run_root / "results" / "fastqc_pre"
+    pre_dir.mkdir(parents=True, exist_ok=True)
+    (pre_dir / "reads_1_fastqc.html").write_text("ok", encoding="utf-8")
+    (pre_dir / "reads_2_fastqc.html").write_text("ok", encoding="utf-8")
+    trimmed_r1 = run_root / "results" / "reads_1.paired.fastq"
+    trimmed_r2 = run_root / "results" / "reads_2.paired.fastq"
+    unpaired_r1 = run_root / "results" / "reads_1.unpaired.fastq"
+    unpaired_r2 = run_root / "results" / "reads_2.unpaired.fastq"
+    trimmed_r1.parent.mkdir(parents=True, exist_ok=True)
+    trimmed_r1.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
+    trimmed_r2.write_text("@r1\nTGCA\n+\n!!!!\n", encoding="utf-8")
+    unpaired_r1.write_text("", encoding="utf-8")
+    (run_root / "metadata.json").write_text(
+        json.dumps(
+            {
+                "steps": {
+                    "fastqc_pre": {"status": "success", "outputs": {"dir": str(pre_dir)}},
+                    "trimmomatic": {
+                        "status": "success",
+                        "outputs": {
+                            "trimmed_r1": str(trimmed_r1),
+                            "trimmed_r2": str(trimmed_r2),
+                            "unpaired_r1": str(unpaired_r1),
+                            "unpaired_r2": str(unpaired_r2),
+                        },
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    calls = {"trim": 0, "post": 0}
+
+    def fake_fastqc(input_file: Path, output_dir: Path, **_: object) -> bool:
+        calls["post"] += 1
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / f"{input_file.stem}_fastqc.html").write_text("ok", encoding="utf-8")
+        return True
+
+    def fake_trimmomatic_pe(
+        input_r1: Path,
+        input_r2: Path,
+        output_r1_paired: Path,
+        output_r1_unpaired: Path,
+        output_r2_paired: Path,
+        output_r2_unpaired: Path,
+        **_: object,
+    ) -> bool:
+        calls["trim"] += 1
+        output_r1_paired.write_text(input_r1.read_text(encoding="utf-8"), encoding="utf-8")
+        output_r2_paired.write_text(input_r2.read_text(encoding="utf-8"), encoding="utf-8")
+        output_r1_unpaired.write_text("", encoding="utf-8")
+        output_r2_unpaired.write_text("", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(pipeline, "_run_fastqc", fake_fastqc)
+    monkeypatch.setattr(pipeline, "_run_trimmomatic_pe", fake_trimmomatic_pe)
+
+    assert pipeline.run_qc_pipeline(None, input_r1=reads_r1, input_r2=reads_r2, outdir=run_root, resume=True, skip_preflight=True) is True
+    assert calls["trim"] == 1
+    assert calls["post"] == 2
+
+
 def test_alignment_resume_skips_completed_steps(tmp_path: Path, monkeypatch) -> None:
     ref = tmp_path / "ref.fa"
     reads = tmp_path / "reads.fastq"
@@ -333,6 +506,56 @@ def test_alignment_resume_recomputes_invalid_flagstat(tmp_path: Path, monkeypatc
     stats = alignment.run_alignment_pipeline(ref, reads, outdir=run_root, resume=True, skip_preflight=True)
     assert stats is not None
     assert stats["mapped"] == 8
+
+
+def test_alignment_resume_skips_completed_steps_for_paired_end(tmp_path: Path, monkeypatch) -> None:
+    ref = tmp_path / "ref.fa"
+    reads_r1 = tmp_path / "reads_1.fastq"
+    reads_r2 = tmp_path / "reads_2.fastq"
+    ref.write_text(">ref\nACGT\n", encoding="utf-8")
+    reads_r1.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
+    reads_r2.write_text("@r1\nTGCA\n+\n!!!!\n", encoding="utf-8")
+    for suffix in (".amb", ".ann", ".bwt", ".pac", ".sa"):
+        ref.with_suffix(ref.suffix + suffix).write_text("idx", encoding="utf-8")
+    run_root = tmp_path / "runs" / "align-pe-002"
+    bam = run_root / "results" / "reads_1.sorted.bam"
+    bam.parent.mkdir(parents=True, exist_ok=True)
+    bam.write_text("bam", encoding="utf-8")
+    bam.with_suffix(".bam.bai").write_text("bai", encoding="utf-8")
+    flagstat = run_root / "results" / "reads_1.sorted.flagstat.txt"
+    flagstat.write_text(
+        "20 + 0 in total (QC-passed reads + QC-failed reads)\n"
+        "18 + 0 mapped (90.00% : N/A)\n"
+        "20 + 0 paired in sequencing\n"
+        "16 + 0 properly paired (80.00% : N/A)\n",
+        encoding="utf-8",
+    )
+    (run_root / "metadata.json").write_text(
+        json.dumps(
+            {
+                "steps": {
+                    "bwa_index": {"status": "success", "outputs": {"index_files": [str(ref.with_suffix(ref.suffix + suffix)) for suffix in (".amb", ".ann", ".bwt", ".pac", ".sa")]}},
+                    "map_sort": {"status": "success", "outputs": {"bam": str(bam)}},
+                    "bam_index": {"status": "success", "outputs": {"bai": str(bam.with_suffix('.bam.bai'))}},
+                    "flagstat": {"status": "success", "outputs": {"flagstat": str(flagstat)}},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(alignment, "_run_bwa_index", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should skip index")))
+    monkeypatch.setattr(alignment, "_run_bwa_mem_pipe_sort_pe", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should skip paired map")))
+    monkeypatch.setattr(alignment, "_run_samtools_index", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should skip bam index")))
+    monkeypatch.setattr(alignment, "_run_samtools_flagstat", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should skip flagstat")))
+    monkeypatch.setattr(alignment, "display_alignment_stats", lambda stats: None)
+
+    stats = alignment.run_alignment_pipeline(ref, None, input_r1=reads_r1, input_r2=reads_r2, outdir=run_root, resume=True, skip_preflight=True)
+    assert stats is not None
+    assert stats["properly_paired"] == 16
+    metadata = json.loads((run_root / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["steps"]["map_sort"]["status"] == "skipped"
+    assert metadata["steps"]["flagstat"]["status"] == "skipped"
 
 
 def test_search_resume_skips_completed_steps(tmp_path: Path, monkeypatch) -> None:
@@ -458,3 +681,154 @@ def test_cmd_search_failure_prints_diagnostics(tmp_path: Path, monkeypatch, caps
 
     assert exit_code == cli.EXIT_RUNTIME_ERROR
     assert "Failed Step: blastn" in capsys.readouterr().err
+
+
+def test_cmd_qc_rejects_mixed_single_and_paired_inputs(tmp_path: Path, capsys) -> None:
+    reads = tmp_path / "reads.fastq"
+    reads_r1 = tmp_path / "reads_1.fastq"
+    reads_r2 = tmp_path / "reads_2.fastq"
+    for path in (reads, reads_r1, reads_r2):
+        path.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
+
+    exit_code = cli.cmd_qc(
+        Namespace(
+            quiet=False,
+            json=True,
+            config=None,
+            input=str(reads),
+            input_r1=str(reads_r1),
+            input_r2=str(reads_r2),
+            output=None,
+            outdir=None,
+            adapter=None,
+            minlen=36,
+            resume=False,
+        )
+    )
+
+    assert exit_code == cli.EXIT_ARGUMENT_ERROR
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"] == "invalid_input_combination"
+    assert "cannot mix" in payload["message"]
+
+
+def test_cmd_qc_rejects_incomplete_paired_inputs(tmp_path: Path, capsys) -> None:
+    reads_r1 = tmp_path / "reads_1.fastq"
+    reads_r1.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
+
+    exit_code = cli.cmd_qc(
+        Namespace(
+            quiet=False,
+            json=True,
+            config=None,
+            input=None,
+            input_r1=str(reads_r1),
+            input_r2=None,
+            output=None,
+            outdir=None,
+            adapter=None,
+            minlen=36,
+            resume=False,
+        )
+    )
+
+    assert exit_code == cli.EXIT_ARGUMENT_ERROR
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"] == "invalid_input_combination"
+    assert "requires both input_r1 and input_r2" in payload["message"]
+
+
+def test_cmd_align_rejects_incomplete_paired_inputs(tmp_path: Path, capsys) -> None:
+    ref = tmp_path / "ref.fa"
+    reads_r1 = tmp_path / "reads_1.fastq"
+    ref.write_text(">ref\nACGT\n", encoding="utf-8")
+    reads_r1.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
+
+    exit_code = cli.cmd_align(
+        Namespace(
+            quiet=False,
+            json=True,
+            config=None,
+            ref=str(ref),
+            input=None,
+            input_r1=str(reads_r1),
+            input_r2=None,
+            output=None,
+            outdir=None,
+            threads=1,
+            resume=False,
+        )
+    )
+
+    assert exit_code == cli.EXIT_ARGUMENT_ERROR
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"] == "invalid_input_combination"
+    assert "requires both input_r1 and input_r2" in payload["message"]
+
+
+def test_qc_config_rejects_mixed_single_and_paired_inputs(tmp_path: Path) -> None:
+    config_path = tmp_path / "qc.yml"
+    config_path.write_text(
+        "qc:\n  input: reads.fastq\n  input_r1: reads_1.fastq\n  input_r2: reads_2.fastq\n",
+        encoding="utf-8",
+    )
+
+    try:
+        load_workflow_config(config_path, "qc")
+    except ConfigError as exc:
+        assert "cannot mix" in str(exc)
+    else:
+        raise AssertionError("expected ConfigError")
+
+
+def test_align_config_rejects_incomplete_paired_inputs(tmp_path: Path) -> None:
+    config_path = tmp_path / "align.yml"
+    config_path.write_text(
+        "align:\n  ref: ref.fa\n  input_r1: reads_1.fastq\n",
+        encoding="utf-8",
+    )
+
+    try:
+        load_workflow_config(config_path, "align")
+    except ConfigError as exc:
+        assert "requires both 'input_r1' and 'input_r2'" in str(exc)
+    else:
+        raise AssertionError("expected ConfigError")
+
+
+def test_report_renders_nested_paired_metadata(tmp_path: Path) -> None:
+    run_root = tmp_path / "runs" / "qc-pe-003"
+    run_root.mkdir(parents=True, exist_ok=True)
+    (run_root / "metadata.json").write_text(
+        json.dumps(
+            {
+                "workflow": "qc",
+                "version": "0.7.0",
+                "status": "success",
+                "started_at": "2026-05-06T00:00:00Z",
+                "completed_at": "2026-05-06T00:10:00Z",
+                "command": "qc",
+                "parameters": {"paired": True},
+                "inputs": {"input_r1": "/tmp/reads_1.fastq", "input_r2": "/tmp/reads_2.fastq"},
+                "outputs": {"trimmed_r1": "/tmp/reads_1.paired.fastq", "trimmed_r2": "/tmp/reads_2.paired.fastq"},
+                "steps": {},
+                "logs": {},
+                "runtime": {},
+                "tool_versions": {},
+                "input_details": {
+                    "input_r1": {"size_bytes": 12, "sha256": "abc"},
+                    "input_r2": {"size_bytes": 12, "sha256": "def"},
+                },
+                "failure_summary": "",
+                "failure_details": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    html_path = tmp_path / "report.html"
+    report.generate_report(run_root, html_path, title="paired")
+    html = html_path.read_text(encoding="utf-8")
+    assert "input_r1" in html
+    assert "sha256" in html
+    assert "reads_1.paired.fastq" in html

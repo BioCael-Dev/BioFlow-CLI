@@ -26,9 +26,9 @@ BioFlow-CLI 是一个基于 **MIT 许可证** 发布的 **开源项目**。
 - **环境管理器** — 一键检测和安装常用生物工具（FastQC、SAMtools、BWA、BLAST+、Trimmomatic），通过 Conda 管理
 - **序列格式化** — 标准化 FASTA/FASTQ 文件，支持自定义行宽，并使用流式读写降低大文件内存占用
 - **批量处理** — 支持目录递归扫描、多进程加速、多文件处理、进度跟踪及统计表格
-- **序列比对** — 集成 BWA + SAMtools 完整流程，支持建索引、比对、排序、BAM 索引与比对统计
+- **序列比对** — 集成 BWA + SAMtools 完整流程，支持单端/双端输入、建索引、比对、排序、BAM 索引与比对统计
 - **BLAST 检索** — 集成 `makeblastdb` + `blastn` 基础核酸检索流程，输出标准 tabular 结果
-- **QC 流程** — 集成 FastQC + Trimmomatic 的质量控制流水线
+- **QC 流程** — 集成 FastQC + Trimmomatic 的质量控制流水线，支持单端/双端输入
 - **运行检查** — 提供 `bioflow inspect`，可汇总运行状态、关键输出、失败步骤与日志位置
 - **HTML 运行报告** — 可将单次或多次工作流运行导出为单文件 HTML 汇总报告
 - **失败诊断** — 为失败的 workflow 提供统一 CLI 诊断输出，包括失败步骤、失败命令、stderr 摘要和日志路径
@@ -138,8 +138,11 @@ bioflow batch -i ./data -o ./formatted -p "*.fastq" -r -w 60
 # 使用 4 个工作进程加速批量处理
 bioflow batch -i ./data -o ./formatted -p "*.fastq" -r --workers 4
 
-# 运行 QC 流程，并指定统一运行目录
+# 运行单端 QC 流程，并指定统一运行目录
 bioflow qc --input reads.fastq --outdir runs/qc-001 --adapter adapters.fa --minlen 36
+
+# 运行双端 QC 流程
+bioflow qc --input-r1 reads_1.fastq --input-r2 reads_2.fastq --outdir runs/qc-pe-001 --adapter adapters.fa --minlen 36
 
 # 从配置文件运行 QC 流程
 bioflow qc --config examples/qc.yml
@@ -147,8 +150,11 @@ bioflow qc --config examples/qc.yml
 # 恢复中断的 QC 流程
 bioflow qc --input reads.fastq --outdir runs/qc-001 --resume
 
-# 运行序列比对流程
+# 运行单端序列比对流程
 bioflow align --ref ref.fa --input reads.fastq --outdir runs/align-001 --output aligned.bam --threads 4
+
+# 运行双端序列比对流程
+bioflow align --ref ref.fa --input-r1 reads_1.fastq --input-r2 reads_2.fastq --outdir runs/align-pe-001 --output aligned.bam --threads 4
 
 # 从配置文件运行序列比对流程
 bioflow align --config examples/align.yml
@@ -220,6 +226,8 @@ bioflow --json batch -i ./data -o ./formatted
 - `bioflow align --config align.yml`
 - `bioflow search --config search.yml`
 - 参数优先级为：CLI 显式参数 > YAML 配置 > 内置默认值
+- `qc` 与 `align` 支持二选一输入方式：`input` 或 `input_r1` + `input_r2`
+- `input` 不能与 `input_r1` / `input_r2` 混用
 - 示例模板已放在 `examples/`
 
 #### 工作流输出目录规范
@@ -228,6 +236,8 @@ bioflow --json batch -i ./data -o ./formatted
 - 可通过 `--outdir` 指定运行根目录；未指定时会在输入文件旁自动创建 `qc_run`、`align_run` 或 `search_run`
 - 每次运行都会生成 `logs/`、`results/`、`tmp/` 和 `metadata.json`
 - `metadata.json` 现在额外记录输入文件大小 / 修改时间 / sha256、运行环境、工具版本和失败摘要
+- 双端 `qc` 会额外记录 `trimmed_r1`、`trimmed_r2`、`unpaired_r1`、`unpaired_r2`
+- 双端 `align` 会记录 `input_r1`、`input_r2`、`bam`、`bai` 以及成对比对统计
 - 若运行失败，诊断日志会保留在 `logs/` 目录中，便于排错
 
 #### 恢复执行与检查点
@@ -282,7 +292,7 @@ pip install -e .[dev]
 
 ## 项目状态
 
-当前开发版本：**v0.6.1**
+当前开发版本：**v0.7.0**
 
 ## 许可证
 

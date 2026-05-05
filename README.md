@@ -29,11 +29,11 @@ License text: [MIT License](LICENSE)
   - Batch processing with optional multi-process acceleration, progress tracking, and result tables
 - **Sequence Alignment**:
   - BWA index + BWA mem + SAMtools sort/index + `samtools flagstat`
-  - Mapping statistics summary for terminal workflows
+  - Single-end and paired-end read support with mapping statistics summary
 - **BLAST Search**:
   - `makeblastdb` + `blastn` nucleotide search workflow
   - Tabular result output (`outfmt 6`) for downstream analysis
-- **QC Pipeline**: Integrated FastQC + Trimmomatic workflow
+- **QC Pipeline**: Integrated FastQC + Trimmomatic workflow for single-end and paired-end reads
 - **Run Inspection**: `bioflow inspect` summarizes run status, critical outputs, failed steps, and log locations
 - **HTML Run Reports**: Export one or more workflow runs into a portable single-file HTML summary
 - **Failure Diagnostics**: Unified failure output across workflows with failed step, failed command, stderr tail, and direct log paths
@@ -95,8 +95,11 @@ bioflow batch -i ./data -o ./formatted -p "*.fastq" -r -w 60
 # Batch format with 4 worker processes
 bioflow batch -i ./data -o ./formatted -p "*.fastq" -r --workers 4
 
-# Run QC pipeline with a managed run directory
+# Run QC pipeline in single-end mode
 bioflow qc --input reads.fastq --outdir runs/qc-001 --adapter adapters.fa --minlen 36
+
+# Run QC pipeline in paired-end mode
+bioflow qc --input-r1 reads_1.fastq --input-r2 reads_2.fastq --outdir runs/qc-pe-001 --adapter adapters.fa --minlen 36
 
 # Run QC pipeline from config
 bioflow qc --config examples/qc.yml
@@ -104,8 +107,11 @@ bioflow qc --config examples/qc.yml
 # Resume an interrupted QC run
 bioflow qc --input reads.fastq --outdir runs/qc-001 --resume
 
-# Run alignment pipeline
+# Run alignment pipeline in single-end mode
 bioflow align --ref ref.fa --input reads.fastq --outdir runs/align-001 --output aligned.bam --threads 4
+
+# Run alignment pipeline in paired-end mode
+bioflow align --ref ref.fa --input-r1 reads_1.fastq --input-r2 reads_2.fastq --outdir runs/align-pe-001 --output aligned.bam --threads 4
 
 # Run alignment pipeline from config
 bioflow align --config examples/align.yml
@@ -179,6 +185,8 @@ bioflow --json batch -i ./data -o ./formatted
 - `bioflow align --config align.yml`
 - `bioflow search --config search.yml`
 - parameter precedence is: explicit CLI argument > YAML config > built-in default
+- `qc` and `align` support either `input` or the `input_r1` + `input_r2` pair
+- `input` cannot be combined with `input_r1` / `input_r2`
 - example templates are available in `examples/`
 
 ### Workflow Output Layout
@@ -187,6 +195,8 @@ bioflow --json batch -i ./data -o ./formatted
 - set `--outdir` to control the run root; if omitted, BioFlow-CLI creates `qc_run`, `align_run`, or `search_run` beside the input file
 - each run contains `logs/`, `results/`, `tmp/`, and `metadata.json`
 - metadata now records input file size / mtime / sha256, runtime environment, tool versions, and failure summary
+- paired-end `qc` metadata also records `trimmed_r1`, `trimmed_r2`, `unpaired_r1`, and `unpaired_r2`
+- paired-end `align` metadata records `input_r1`, `input_r2`, `bam`, `bai`, and paired flagstat metrics
 - on failure, diagnostic stdout/stderr logs are retained under `logs/`
 
 ### Resume And Checkpoints
@@ -241,7 +251,7 @@ pip install -e .[dev]
 
 ## Project Status
 
-Current development version: **v0.6.1**
+Current development version: **v0.7.0**
 
 Release history and notes: [GitHub Releases](https://github.com/BioCael-Dev/BioFlow-CLI/releases)
 

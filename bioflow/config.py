@@ -9,8 +9,8 @@ import yaml
 
 
 WORKFLOW_ALLOWED_KEYS: dict[str, set[str]] = {
-    "qc": {"input", "output", "outdir", "adapter", "minlen", "resume"},
-    "align": {"ref", "input", "output", "outdir", "threads", "resume"},
+    "qc": {"input", "input_r1", "input_r2", "output", "outdir", "adapter", "minlen", "resume"},
+    "align": {"ref", "input", "input_r1", "input_r2", "output", "outdir", "threads", "resume"},
     "search": {"db", "query", "output", "outdir", "evalue", "max_target_seqs", "top", "resume"},
 }
 
@@ -58,5 +58,18 @@ def load_workflow_config(config_path: Path, workflow: str) -> dict[str, Any]:
         raise ConfigError(
             f"Unknown config keys for {workflow}: {', '.join(unknown)}"
         )
+
+    if workflow in {"qc", "align"}:
+        has_single = bool(data.get("input"))
+        has_r1 = bool(data.get("input_r1"))
+        has_r2 = bool(data.get("input_r2"))
+        if has_single and (has_r1 or has_r2):
+            raise ConfigError(
+                f"{workflow} config cannot mix 'input' with 'input_r1/input_r2'"
+            )
+        if has_r1 != has_r2:
+            raise ConfigError(
+                f"{workflow} paired-end config requires both 'input_r1' and 'input_r2'"
+            )
 
     return dict(data)

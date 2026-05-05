@@ -124,6 +124,45 @@ def _run_trimmomatic(
     )
 
 
+def _run_trimmomatic_pe(
+    input_r1: Path,
+    input_r2: Path,
+    output_r1_paired: Path,
+    output_r1_unpaired: Path,
+    output_r2_paired: Path,
+    output_r2_unpaired: Path,
+    *,
+    adapter: str | None = None,
+    minlen: int = 36,
+    stdout_log: Path | None = None,
+    stderr_log: Path | None = None,
+) -> bool:
+    """运行 Trimmomatic 双端修剪。"""
+    cmd = [
+        "trimmomatic",
+        "PE",
+        "-phred33",
+        str(input_r1),
+        str(input_r2),
+        str(output_r1_paired),
+        str(output_r1_unpaired),
+        str(output_r2_paired),
+        str(output_r2_unpaired),
+    ]
+    if adapter:
+        cmd.append(f"ILLUMINACLIP:{adapter}:2:30:10")
+    cmd.append("LEADING:3")
+    cmd.append("TRAILING:3")
+    cmd.append("SLIDINGWINDOW:4:15")
+    cmd.append(f"MINLEN:{minlen}")
+    return _run_cmd(
+        cmd,
+        description=t("qc_running_trimmomatic", file=f"{input_r1.name} / {input_r2.name}"),
+        stdout_log=stdout_log,
+        stderr_log=stderr_log,
+    )
+
+
 def _dir_has_outputs(path: Path) -> bool:
     """目录存在且包含至少一个文件。"""
     return path.is_dir() and any(child.is_file() for child in path.iterdir())
@@ -134,9 +173,36 @@ def _is_nonempty_file(path: Path) -> bool:
     return path.is_file() and path.stat().st_size > 0
 
 
+def _validate_qc_inputs(
+    input_file: Path | None,
+    input_r1: Path | None,
+    input_r2: Path | None,
+) -> tuple[bool, Path]:
+    """校验 QC 单端/双端输入组合并返回 anchor。"""
+    has_single = input_file is not None
+    has_r1 = input_r1 is not None
+    has_r2 = input_r2 is not None
+    if has_single and (has_r1 or has_r2):
+        raise ValueError("qc cannot mix input with input_r1/input_r2")
+    if has_r1 != has_r2:
+        raise ValueError("qc paired-end mode requires both input_r1 and input_r2")
+    if not has_single and not (has_r1 and has_r2):
+        raise ValueError("qc requires input or input_r1/input_r2")
+    anchor = input_file or input_r1
+    assert anchor is not None
+    return has_r1 and has_r2, anchor
+
+
+def _fastqc_report_exists(input_file: Path, output_dir: Path) -> bool:
+    """FastQC HTML 报告是否存在。"""
+    return (output_dir / f"{input_file.stem}_fastqc.html").is_file()
+
+
 def run_qc_pipeline(
-    input_file: Path,
+    input_file: Path | None,
     *,
+    input_r1: Path | None = None,
+    input_r2: Path | None = None,
     output_dir: Path | None = None,
     outdir: Path | None = None,
     adapter: str | None = None,
@@ -148,7 +214,7 @@ def run_qc_pipeline(
     """执行完整的 QC 串联流程：FastQC → Trimmomatic → FastQC。
 
     Args:
-        input_file: 输入 FASTQ 文件路径。
+        input_file: 单端 FASTQ 输入文件路径。
         output_dir: 运行输出根目录，默认在输入文件同目录下创建 qc_run/。
         adapter: Trimmomatic adapter 文件路径（可选）。
         minlen: Trimmomatic 最短读长阈值，默认 36。
@@ -163,15 +229,28 @@ def run_qc_pipeline(
         if not preflight_check(QC_REQUIRED_TOOLS, cli_mode=cli_mode):
             return False
 
+    paired_mode, anchor = _validate_qc_inputs(input_file, input_r1, input_r2)
+
     # 2. 准备运行目录
-    layout = create_run_layout("qc", input_file, outdir=outdir or output_dir)
+    layout = create_run_layout("qc", anchor, outdir=outdir or output_dir)
     started_at = utc_now_iso()
     fastqc_pre_dir = layout.results_dir / "fastqc_pre"
     fastqc_post_dir = layout.results_dir / "fastqc_post"
-    trimmed_file = layout.results_dir / f"{input_file.stem}.trimmed{input_file.suffix}"
+    if paired_mode:
+        assert input_r1 is not None and input_r2 is not None
+        trimmed_r1 = layout.results_dir / f"{input_r1.stem}.paired{input_r1.suffix}"
+        trimmed_r2 = layout.results_dir / f"{input_r2.stem}.paired{input_r2.suffix}"
+        unpaired_r1 = layout.results_dir / f"{input_r1.stem}.unpaired{input_r1.suffix}"
+        unpaired_r2 = layout.results_dir / f"{input_r2.stem}.unpaired{input_r2.suffix}"
+        trimmed_file = trimmed_r1
+    else:
+        trimmed_file = layout.results_dir / f"{input_file.stem}.trimmed{input_file.suffix}"
     existing_metadata = read_metadata(layout)
     tool_versions = collect_tool_versions(QC_REQUIRED_TOOLS)
-    input_details = collect_input_details({"input": input_file})
+    if paired_mode:
+        input_details = collect_input_details({"input_r1": input_r1, "input_r2": input_r2})
+    else:
+        input_details = collect_input_details({"input": input_file})
     failure_summary = str(existing_metadata.get("failure_summary", ""))
     failure_details = existing_metadata.get("failure_details", {})
     steps = init_steps(
@@ -184,14 +263,30 @@ def run_qc_pipeline(
             layout,
             status=status,
             command="qc",
-            parameters={"adapter": adapter, "minlen": minlen, "resume": resume},
-            inputs={"input": str(input_file)},
-            outputs={
-                "root": str(layout.root),
-                "fastqc_pre": str(fastqc_pre_dir),
-                "fastqc_post": str(fastqc_post_dir),
-                "trimmed": str(trimmed_file),
-            },
+            parameters={"adapter": adapter, "minlen": minlen, "resume": resume, "paired": paired_mode},
+            inputs=(
+                {"input_r1": str(input_r1), "input_r2": str(input_r2)}
+                if paired_mode
+                else {"input": str(input_file)}
+            ),
+            outputs=(
+                {
+                    "root": str(layout.root),
+                    "fastqc_pre": str(fastqc_pre_dir),
+                    "fastqc_post": str(fastqc_post_dir),
+                    "trimmed_r1": str(trimmed_r1),
+                    "trimmed_r2": str(trimmed_r2),
+                    "unpaired_r1": str(unpaired_r1),
+                    "unpaired_r2": str(unpaired_r2),
+                }
+                if paired_mode
+                else {
+                    "root": str(layout.root),
+                    "fastqc_pre": str(fastqc_pre_dir),
+                    "fastqc_post": str(fastqc_post_dir),
+                    "trimmed": str(trimmed_file),
+                }
+            ),
             started_at=started_at,
             completed_at=completed_at,
             extra={
@@ -207,7 +302,7 @@ def run_qc_pipeline(
     persist("running")
 
     console.print(
-        Panel(t("qc_pipeline_start", file=str(input_file)), style="bold magenta")
+        Panel(t("qc_pipeline_start", file=str(input_r1 if paired_mode else input_file)), style="bold magenta")
     )
 
     # 3. 步骤 1：初始 FastQC
@@ -215,7 +310,11 @@ def run_qc_pipeline(
     if resume and step_resume_ready(
         existing_metadata,
         QC_STEP_FASTQC_PRE,
-        validator=lambda: _dir_has_outputs(fastqc_pre_dir),
+        validator=(
+            (lambda: _fastqc_report_exists(input_r1, fastqc_pre_dir) and _fastqc_report_exists(input_r2, fastqc_pre_dir))
+            if paired_mode
+            else (lambda: _fastqc_report_exists(input_file, fastqc_pre_dir))
+        ),
         required_outputs=("dir",),
     ):
         set_step_state(steps, QC_STEP_FASTQC_PRE, STEP_SKIPPED, outputs={"dir": str(fastqc_pre_dir)}, note="reused existing output")
@@ -223,11 +322,21 @@ def run_qc_pipeline(
     else:
         set_step_state(steps, QC_STEP_FASTQC_PRE, STEP_RUNNING)
         persist("running")
-        if not _run_fastqc(input_file, fastqc_pre_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log):
+        fastqc_ok = (
+            _run_fastqc(input_r1, fastqc_pre_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
+            and _run_fastqc(input_r2, fastqc_pre_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
+            if paired_mode
+            else _run_fastqc(input_file, fastqc_pre_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
+        )
+        if not fastqc_ok:
             failure_summary = build_failure_summary(QC_STEP_FASTQC_PRE, stderr_log=layout.stderr_log, fallback="FastQC failed")
             failure_details = build_failure_details(
                 step_name=QC_STEP_FASTQC_PRE,
-                command=f"fastqc {input_file} -o {fastqc_pre_dir} --quiet",
+                command=(
+                    f"fastqc {input_r1} {input_r2} -o {fastqc_pre_dir} --quiet"
+                    if paired_mode
+                    else f"fastqc {input_file} -o {fastqc_pre_dir} --quiet"
+                ),
                 layout=layout,
                 error=failure_summary,
             )
@@ -244,28 +353,82 @@ def run_qc_pipeline(
     if resume and step_resume_ready(
         existing_metadata,
         QC_STEP_TRIM,
-        validator=lambda: _is_nonempty_file(trimmed_file),
-        required_outputs=("trimmed",),
+        validator=(
+            (
+                lambda: (
+                    _is_nonempty_file(trimmed_r1)
+                    and _is_nonempty_file(trimmed_r2)
+                    and unpaired_r1.exists()
+                    and unpaired_r2.exists()
+                )
+            )
+            if paired_mode
+            else (lambda: _is_nonempty_file(trimmed_file))
+        ),
+        required_outputs=("trimmed_r1", "trimmed_r2", "unpaired_r1", "unpaired_r2") if paired_mode else ("trimmed",),
     ):
-        set_step_state(steps, QC_STEP_TRIM, STEP_SKIPPED, outputs={"trimmed": str(trimmed_file)}, note="reused existing output")
+        set_step_state(
+            steps,
+            QC_STEP_TRIM,
+            STEP_SKIPPED,
+            outputs=(
+                {
+                    "trimmed_r1": str(trimmed_r1),
+                    "trimmed_r2": str(trimmed_r2),
+                    "unpaired_r1": str(unpaired_r1),
+                    "unpaired_r2": str(unpaired_r2),
+                }
+                if paired_mode
+                else {"trimmed": str(trimmed_file)}
+            ),
+            note="reused existing output",
+        )
         persist("running")
     else:
         set_step_state(steps, QC_STEP_TRIM, STEP_RUNNING)
         persist("running")
-        if not _run_trimmomatic(
-            input_file,
-            trimmed_file,
-            adapter=adapter,
-            minlen=minlen,
-            stdout_log=layout.stdout_log,
-            stderr_log=layout.stderr_log,
-        ):
+        trim_ok = (
+            _run_trimmomatic_pe(
+                input_r1,
+                input_r2,
+                trimmed_r1,
+                unpaired_r1,
+                trimmed_r2,
+                unpaired_r2,
+                adapter=adapter,
+                minlen=minlen,
+                stdout_log=layout.stdout_log,
+                stderr_log=layout.stderr_log,
+            )
+            if paired_mode
+            else _run_trimmomatic(
+                input_file,
+                trimmed_file,
+                adapter=adapter,
+                minlen=minlen,
+                stdout_log=layout.stdout_log,
+                stderr_log=layout.stderr_log,
+            )
+        )
+        if not trim_ok:
             failure_summary = build_failure_summary(QC_STEP_TRIM, stderr_log=layout.stderr_log, fallback="Trimmomatic failed")
-            trim_parts = [
-                "trimmomatic SE -phred33",
-                str(input_file),
-                str(trimmed_file),
-            ]
+            trim_parts = (
+                [
+                    "trimmomatic PE -phred33",
+                    str(input_r1),
+                    str(input_r2),
+                    str(trimmed_r1),
+                    str(unpaired_r1),
+                    str(trimmed_r2),
+                    str(unpaired_r2),
+                ]
+                if paired_mode
+                else [
+                    "trimmomatic SE -phred33",
+                    str(input_file),
+                    str(trimmed_file),
+                ]
+            )
             if adapter:
                 trim_parts.append(f"ILLUMINACLIP:{adapter}:2:30:10")
             trim_parts.extend(["LEADING:3", "TRAILING:3", "SLIDINGWINDOW:4:15", f"MINLEN:{minlen}"])
@@ -275,10 +438,39 @@ def run_qc_pipeline(
                 layout=layout,
                 error=failure_summary,
             )
-            set_step_state(steps, QC_STEP_TRIM, STEP_FAILED, outputs={"trimmed": str(trimmed_file)}, error=failure_summary)
+            set_step_state(
+                steps,
+                QC_STEP_TRIM,
+                STEP_FAILED,
+                outputs=(
+                    {
+                        "trimmed_r1": str(trimmed_r1),
+                        "trimmed_r2": str(trimmed_r2),
+                        "unpaired_r1": str(unpaired_r1),
+                        "unpaired_r2": str(unpaired_r2),
+                    }
+                    if paired_mode
+                    else {"trimmed": str(trimmed_file)}
+                ),
+                error=failure_summary,
+            )
             persist("failed", completed_at=utc_now_iso())
             return False
-        set_step_state(steps, QC_STEP_TRIM, STEP_SUCCESS, outputs={"trimmed": str(trimmed_file)})
+        set_step_state(
+            steps,
+            QC_STEP_TRIM,
+            STEP_SUCCESS,
+            outputs=(
+                {
+                    "trimmed_r1": str(trimmed_r1),
+                    "trimmed_r2": str(trimmed_r2),
+                    "unpaired_r1": str(unpaired_r1),
+                    "unpaired_r2": str(unpaired_r2),
+                }
+                if paired_mode
+                else {"trimmed": str(trimmed_file)}
+            ),
+        )
         persist("running")
 
     # 5. 步骤 3：修剪后 FastQC
@@ -286,7 +478,11 @@ def run_qc_pipeline(
     if resume and step_resume_ready(
         existing_metadata,
         QC_STEP_FASTQC_POST,
-        validator=lambda: _dir_has_outputs(fastqc_post_dir),
+        validator=(
+            (lambda: _fastqc_report_exists(trimmed_r1, fastqc_post_dir) and _fastqc_report_exists(trimmed_r2, fastqc_post_dir))
+            if paired_mode
+            else (lambda: _fastqc_report_exists(trimmed_file, fastqc_post_dir))
+        ),
         required_outputs=("dir",),
     ):
         set_step_state(steps, QC_STEP_FASTQC_POST, STEP_SKIPPED, outputs={"dir": str(fastqc_post_dir)}, note="reused existing output")
@@ -294,11 +490,21 @@ def run_qc_pipeline(
     else:
         set_step_state(steps, QC_STEP_FASTQC_POST, STEP_RUNNING)
         persist("running")
-        if not _run_fastqc(trimmed_file, fastqc_post_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log):
+        fastqc_post_ok = (
+            _run_fastqc(trimmed_r1, fastqc_post_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
+            and _run_fastqc(trimmed_r2, fastqc_post_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
+            if paired_mode
+            else _run_fastqc(trimmed_file, fastqc_post_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
+        )
+        if not fastqc_post_ok:
             failure_summary = build_failure_summary(QC_STEP_FASTQC_POST, stderr_log=layout.stderr_log, fallback="FastQC failed")
             failure_details = build_failure_details(
                 step_name=QC_STEP_FASTQC_POST,
-                command=f"fastqc {trimmed_file} -o {fastqc_post_dir} --quiet",
+                command=(
+                    f"fastqc {trimmed_r1} {trimmed_r2} -o {fastqc_post_dir} --quiet"
+                    if paired_mode
+                    else f"fastqc {trimmed_file} -o {fastqc_post_dir} --quiet"
+                ),
                 layout=layout,
                 error=failure_summary,
             )
@@ -327,20 +533,51 @@ def qc_menu() -> None:
 
     # 输入文件
     try:
-        input_path = questionary.path(t("qc_input_prompt")).ask()
+        input_mode = questionary.select(
+            "Select input mode:",
+            choices=["single-end", "paired-end"],
+            default="single-end",
+        ).ask()
     except KeyboardInterrupt:
         return
-    if not input_path:
+    if not input_mode:
         return
 
-    src = Path(input_path)
-    if not src.exists():
-        console.print(t("seq_file_not_found", path=str(src)), style="bold red")
-        input(t("press_enter"))
-        return
+    src: Path | None = None
+    src_r1: Path | None = None
+    src_r2: Path | None = None
+    if input_mode == "paired-end":
+        try:
+            input_r1_path = questionary.path(t("qc_input_r1_prompt")).ask()
+            input_r2_path = questionary.path(t("qc_input_r2_prompt")).ask()
+        except KeyboardInterrupt:
+            return
+        if not input_r1_path or not input_r2_path:
+            return
+        src_r1 = Path(input_r1_path)
+        src_r2 = Path(input_r2_path)
+        for candidate in (src_r1, src_r2):
+            if not candidate.exists():
+                console.print(t("seq_file_not_found", path=str(candidate)), style="bold red")
+                input(t("press_enter"))
+                return
+    else:
+        try:
+            input_path = questionary.path(t("qc_input_prompt")).ask()
+        except KeyboardInterrupt:
+            return
+        if not input_path:
+            return
+        src = Path(input_path)
+        if not src.exists():
+            console.print(t("seq_file_not_found", path=str(src)), style="bold red")
+            input(t("press_enter"))
+            return
 
     # 输出目录
-    default_output = src.parent / "qc_run"
+    anchor = src or src_r1
+    assert anchor is not None
+    default_output = anchor.parent / "qc_run"
     try:
         output_path = questionary.path(
             t("qc_output_prompt"), default=str(default_output)
@@ -379,6 +616,8 @@ def qc_menu() -> None:
     # 执行流程
     run_qc_pipeline(
         src,
+        input_r1=src_r1,
+        input_r2=src_r2,
         output_dir=Path(output_path),
         adapter=adapter,
         minlen=minlen,

@@ -179,6 +179,88 @@ def _run_bwa_mem_pipe_sort(
     return False
 
 
+def _run_bwa_mem_pipe_sort_pe(
+    ref: Path,
+    reads_r1: Path,
+    reads_r2: Path,
+    output_bam: Path,
+    *,
+    threads: int = 1,
+    stdout_log: Path | None = None,
+    stderr_log: Path | None = None,
+) -> bool:
+    """BWA mem paired-end → SAMtools view → SAMtools sort 管道。"""
+    description = t("align_mapping")
+    console.print(f"  → {description}", style="cyan")
+
+    bwa_cmd = ["bwa", "mem", "-t", str(threads), str(ref), str(reads_r1), str(reads_r2)]
+    view_cmd = ["samtools", "view", "-bS", "-@", str(threads), "-"]
+    sort_cmd = ["samtools", "sort", "-@", str(threads), "-o", str(output_bam), "-"]
+
+    bwa_proc: subprocess.Popen[str] | None = None
+    view_proc: subprocess.Popen[bytes] | None = None
+    sort_proc: subprocess.Popen[bytes] | None = None
+    try:
+        bwa_proc = subprocess.Popen(
+            bwa_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        view_proc = subprocess.Popen(
+            view_cmd,
+            stdin=bwa_proc.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if bwa_proc.stdout is not None:
+            bwa_proc.stdout.close()
+
+        sort_proc = subprocess.Popen(
+            sort_cmd,
+            stdin=view_proc.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if view_proc.stdout is not None:
+            view_proc.stdout.close()
+
+        _sort_stdout, sort_stderr = sort_proc.communicate()
+        bwa_stderr = ""
+        view_stderr = ""
+        if bwa_proc.stderr is not None:
+            bwa_stderr = bwa_proc.stderr.read()
+        if view_proc.stderr is not None:
+            view_stderr = view_proc.stderr.read()
+
+        bwa_code = bwa_proc.wait()
+        view_code = view_proc.wait()
+        sort_code = sort_proc.returncode
+
+        if bwa_code == 0 and view_code == 0 and sort_code == 0:
+            append_log(stderr_log, bwa_stderr)
+            append_log(stderr_log, view_stderr)
+            append_log(stderr_log, sort_stderr.decode("utf-8", errors="replace"))
+            return True
+
+        errors = "\n".join(
+            part.strip()
+            for part in (bwa_stderr, view_stderr, sort_stderr.decode("utf-8", errors="replace"))
+            if part and part.strip()
+        ) or "pipeline execution failed"
+        append_log(stderr_log, errors)
+        return _print_alignment_failure(description, errors)
+    except FileNotFoundError as exc:
+        append_log(stderr_log, str(exc))
+        return _print_alignment_failure(description, str(exc))
+    finally:
+        for proc in (bwa_proc, view_proc, sort_proc):
+            if proc is not None and proc.poll() is None:
+                proc.kill()
+
+    return False
+
+
 def _bwa_index_files(ref: Path) -> list[Path]:
     """返回 BWA 索引文件路径列表。"""
     return [ref.with_suffix(ref.suffix + ext) for ext in (".amb", ".ann", ".bwt", ".pac", ".sa")]
@@ -203,6 +285,26 @@ def _flagstat_ready(path: Path) -> bool:
     except OSError:
         return False
     return True
+
+
+def _validate_alignment_inputs(
+    reads: Path | None,
+    input_r1: Path | None,
+    input_r2: Path | None,
+) -> tuple[bool, Path]:
+    """校验比对单端/双端输入组合并返回 anchor。"""
+    has_single = reads is not None
+    has_r1 = input_r1 is not None
+    has_r2 = input_r2 is not None
+    if has_single and (has_r1 or has_r2):
+        raise ValueError("align cannot mix input with input_r1/input_r2")
+    if has_r1 != has_r2:
+        raise ValueError("align paired-end mode requires both input_r1 and input_r2")
+    if not has_single and not (has_r1 and has_r2):
+        raise ValueError("align requires input or input_r1/input_r2")
+    anchor = reads or input_r1
+    assert anchor is not None
+    return has_r1 and has_r2, anchor
 
 
 def _parse_threads(value: str | None) -> int:
@@ -366,7 +468,9 @@ def display_alignment_stats(stats: dict[str, int | float]) -> None:
 
 def run_alignment_pipeline(
     ref: Path,
-    reads: Path,
+    reads: Path | None,
+    input_r1: Path | None = None,
+    input_r2: Path | None = None,
     output: Path | None = None,
     *,
     outdir: Path | None = None,
@@ -381,7 +485,7 @@ def run_alignment_pipeline(
 
     Args:
         ref: 参考基因组文件路径。
-        reads: 输入 reads 文件路径。
+        reads: 单端输入 reads 文件路径。
         output: 输出 BAM 文件路径（默认：reads.sorted.bam）。
         threads: 线程数。
         cli_mode: 是否为 CLI 模式。
@@ -395,18 +499,24 @@ def run_alignment_pipeline(
         if not preflight_check(ALIGN_REQUIRED_TOOLS, cli_mode=cli_mode):
             return None
 
+    paired_mode, anchor = _validate_alignment_inputs(reads, input_r1, input_r2)
+
     # Windows 平台提示
     if platform.system() == "Windows":
         console.print(t("align_windows_warn"), style="bold yellow")
 
-    layout = create_run_layout("align", reads, outdir=outdir)
+    layout = create_run_layout("align", anchor, outdir=outdir)
     started_at = utc_now_iso()
-    output = resolve_result_path(layout, output, _default_output_bam(reads).name)
+    output = resolve_result_path(layout, output, _default_output_bam(anchor).name)
     bai_path = output.with_suffix(output.suffix + ".bai")
     flagstat_path = layout.results_dir / f"{output.stem}.flagstat.txt"
     existing_metadata = read_metadata(layout)
     tool_versions = collect_tool_versions(ALIGN_REQUIRED_TOOLS)
-    input_details = collect_input_details({"ref": ref, "reads": reads})
+    input_details = (
+        collect_input_details({"ref": ref, "input_r1": input_r1, "input_r2": input_r2})
+        if paired_mode
+        else collect_input_details({"ref": ref, "reads": reads})
+    )
     failure_summary = str(existing_metadata.get("failure_summary", ""))
     failure_details = existing_metadata.get("failure_details", {})
     steps = init_steps(
@@ -429,9 +539,13 @@ def run_alignment_pipeline(
             layout,
             status=status,
             command="align",
-            parameters={"threads": threads, "resume": resume},
-            inputs={"ref": str(ref), "reads": str(reads)},
-            outputs={"root": str(layout.root), "bam": str(output), "flagstat": str(flagstat_path)},
+            parameters={"threads": threads, "resume": resume, "paired": paired_mode},
+            inputs=(
+                {"ref": str(ref), "input_r1": str(input_r1), "input_r2": str(input_r2)}
+                if paired_mode
+                else {"ref": str(ref), "reads": str(reads)}
+            ),
+            outputs={"root": str(layout.root), "bam": str(output), "bai": str(bai_path), "flagstat": str(flagstat_path)},
             started_at=started_at,
             completed_at=completed_at,
             extra=extra,
@@ -440,7 +554,7 @@ def run_alignment_pipeline(
     persist("running")
 
     console.print(
-        Panel(t("align_pipeline_start", file=str(reads)), style="bold magenta")
+        Panel(t("align_pipeline_start", file=str(input_r1 if paired_mode else reads)), style="bold magenta")
     )
 
     bwa_index_files = _bwa_index_files(ref)
@@ -487,24 +601,47 @@ def run_alignment_pipeline(
     else:
         set_step_state(steps, ALIGN_STEP_MAP, STEP_RUNNING)
         persist("running")
-        if not _run_bwa_mem_pipe_sort(
-            ref,
-            reads,
-            output,
-            threads=threads,
-            stdout_log=layout.stdout_log,
-            stderr_log=layout.stderr_log,
-        ):
-            failure_summary = build_failure_summary(ALIGN_STEP_MAP, stderr_log=layout.stderr_log, fallback="Alignment failed")
-            failure_details = build_failure_details(
-                step_name=ALIGN_STEP_MAP,
-                command=f"bwa mem -t {threads} {ref} {reads} | samtools view -bS -@ {threads} - | samtools sort -@ {threads} -o {output} -",
-                layout=layout,
-                error=failure_summary,
-            )
-            set_step_state(steps, ALIGN_STEP_MAP, STEP_FAILED, outputs={"bam": str(output)}, error=failure_summary)
-            persist("failed", completed_at=utc_now_iso())
-            return None
+        if paired_mode:
+            assert input_r1 is not None and input_r2 is not None
+            if not _run_bwa_mem_pipe_sort_pe(
+                ref,
+                input_r1,
+                input_r2,
+                output,
+                threads=threads,
+                stdout_log=layout.stdout_log,
+                stderr_log=layout.stderr_log,
+            ):
+                failure_summary = build_failure_summary(ALIGN_STEP_MAP, stderr_log=layout.stderr_log, fallback="Alignment failed")
+                failure_details = build_failure_details(
+                    step_name=ALIGN_STEP_MAP,
+                    command=f"bwa mem -t {threads} {ref} {input_r1} {input_r2} | samtools view -bS -@ {threads} - | samtools sort -@ {threads} -o {output} -",
+                    layout=layout,
+                    error=failure_summary,
+                )
+                set_step_state(steps, ALIGN_STEP_MAP, STEP_FAILED, outputs={"bam": str(output)}, error=failure_summary)
+                persist("failed", completed_at=utc_now_iso())
+                return None
+        else:
+            assert reads is not None
+            if not _run_bwa_mem_pipe_sort(
+                ref,
+                reads,
+                output,
+                threads=threads,
+                stdout_log=layout.stdout_log,
+                stderr_log=layout.stderr_log,
+            ):
+                failure_summary = build_failure_summary(ALIGN_STEP_MAP, stderr_log=layout.stderr_log, fallback="Alignment failed")
+                failure_details = build_failure_details(
+                    step_name=ALIGN_STEP_MAP,
+                    command=f"bwa mem -t {threads} {ref} {reads} | samtools view -bS -@ {threads} - | samtools sort -@ {threads} -o {output} -",
+                    layout=layout,
+                    error=failure_summary,
+                )
+                set_step_state(steps, ALIGN_STEP_MAP, STEP_FAILED, outputs={"bam": str(output)}, error=failure_summary)
+                persist("failed", completed_at=utc_now_iso())
+                return None
         set_step_state(steps, ALIGN_STEP_MAP, STEP_SUCCESS, outputs={"bam": str(output)})
         persist("running")
 
@@ -598,22 +735,52 @@ def align_menu() -> None:
         input(t("press_enter"))
         return
 
-    # Reads 文件路径
     try:
-        reads_path = questionary.path(t("align_input_prompt")).ask()
+        input_mode = questionary.select(
+            "Select input mode:",
+            choices=["single-end", "paired-end"],
+            default="single-end",
+        ).ask()
     except KeyboardInterrupt:
         return
-    if not reads_path:
+    if not input_mode:
         return
 
-    reads = Path(reads_path)
-    if not reads.exists():
-        console.print(t("seq_file_not_found", path=str(reads)), style="bold red")
-        input(t("press_enter"))
-        return
+    reads: Path | None = None
+    reads_r1: Path | None = None
+    reads_r2: Path | None = None
+    if input_mode == "paired-end":
+        try:
+            reads_r1_path = questionary.path(t("align_input_r1_prompt")).ask()
+            reads_r2_path = questionary.path(t("align_input_r2_prompt")).ask()
+        except KeyboardInterrupt:
+            return
+        if not reads_r1_path or not reads_r2_path:
+            return
+        reads_r1 = Path(reads_r1_path)
+        reads_r2 = Path(reads_r2_path)
+        for candidate in (reads_r1, reads_r2):
+            if not candidate.exists():
+                console.print(t("seq_file_not_found", path=str(candidate)), style="bold red")
+                input(t("press_enter"))
+                return
+    else:
+        try:
+            reads_path = questionary.path(t("align_input_prompt")).ask()
+        except KeyboardInterrupt:
+            return
+        if not reads_path:
+            return
+        reads = Path(reads_path)
+        if not reads.exists():
+            console.print(t("seq_file_not_found", path=str(reads)), style="bold red")
+            input(t("press_enter"))
+            return
 
     # 输出 BAM 路径
-    default_output = _default_output_bam(reads)
+    anchor = reads or reads_r1
+    assert anchor is not None
+    default_output = _default_output_bam(anchor)
     try:
         output_path = questionary.path(
             t("align_output_prompt"), default=str(default_output)
@@ -623,7 +790,7 @@ def align_menu() -> None:
     if not output_path:
         return
     resume = False
-    run_root = reads.parent / "align_run"
+    run_root = anchor.parent / "align_run"
     output_candidate = Path(output_path)
     if output_candidate.parent.name == "results":
         run_root = output_candidate.parent.parent
@@ -646,6 +813,8 @@ def align_menu() -> None:
     run_alignment_pipeline(
         ref,
         reads,
+        input_r1=reads_r1,
+        input_r2=reads_r2,
         output=Path(output_path),
         outdir=run_root,
         threads=threads,

@@ -103,6 +103,30 @@ def _merge_workflow_args(
     return merged
 
 
+def _validate_single_or_paired_inputs(
+    *,
+    input_value: Any = None,
+    input_r1_value: Any = None,
+    input_r2_value: Any = None,
+    workflow: str,
+) -> tuple[Path | None, Path | None, Path | None] | str:
+    """校验单端/双端输入组合。"""
+    has_single = bool(input_value)
+    has_r1 = bool(input_r1_value)
+    has_r2 = bool(input_r2_value)
+    if has_single and (has_r1 or has_r2):
+        return f"{workflow} cannot mix input with input_r1/input_r2"
+    if has_r1 != has_r2:
+        return f"{workflow} paired-end mode requires both input_r1 and input_r2"
+    if not has_single and not (has_r1 and has_r2):
+        return f"{workflow} requires input or both input_r1 and input_r2"
+    return (
+        Path(str(input_value)) if has_single else None,
+        Path(str(input_r1_value)) if has_r1 else None,
+        Path(str(input_r2_value)) if has_r2 else None,
+    )
+
+
 def _print_failure_diagnostics(metadata_path: Path, *, as_json: bool) -> None:
     """从 metadata.json 读取并打印统一失败诊断。"""
     if as_json or not metadata_path.exists():
@@ -111,6 +135,12 @@ def _print_failure_diagnostics(metadata_path: Path, *, as_json: bool) -> None:
     details = payload.get("failure_details")
     if isinstance(details, dict):
         console_err.print(format_failure_diagnostics(details), style="bold red")
+
+
+def _json_error_payload(error: str, **extra: Any) -> str:
+    """构造 JSON 错误输出。"""
+    payload = {"error": error, **extra}
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def cmd_seq(args: argparse.Namespace) -> int:
@@ -393,7 +423,7 @@ def cmd_qc(args: argparse.Namespace) -> int:
         params = _merge_workflow_args(
             args,
             "qc",
-            {"input": None, "output": None, "outdir": None, "adapter": None, "minlen": 36, "resume": False},
+            {"input": None, "input_r1": None, "input_r2": None, "output": None, "outdir": None, "adapter": None, "minlen": 36, "resume": False},
         )
     except ConfigError as exc:
         if args.json:
@@ -402,21 +432,28 @@ def cmd_qc(args: argparse.Namespace) -> int:
             console_err.print(f"Error: {exc}", style="bold red")
         return EXIT_ARGUMENT_ERROR
 
-    if not params["input"]:
+    inputs = _validate_single_or_paired_inputs(
+        input_value=params["input"],
+        input_r1_value=params["input_r1"],
+        input_r2_value=params["input_r2"],
+        workflow="qc",
+    )
+    if isinstance(inputs, str):
         if args.json:
-            print(json.dumps({"error": "missing_required", "field": "input"}, ensure_ascii=False))
+            print(_json_error_payload("invalid_input_combination", message=inputs))
         else:
-            console_err.print("Error: input is required (CLI or config)", style="bold red")
+            console_err.print(f"Error: {inputs}", style="bold red")
         return EXIT_ARGUMENT_ERROR
 
-    input_path = Path(str(params["input"]))
+    input_path, input_r1_path, input_r2_path = inputs
 
-    if not input_path.exists():
-        if args.json:
-            print(json.dumps({"error": "file_not_found", "path": str(input_path)}, ensure_ascii=False))
-        else:
-            console_err.print(t("seq_file_not_found", path=str(input_path)), style="bold red")
-        return EXIT_ARGUMENT_ERROR
+    for candidate in (input_path, input_r1_path, input_r2_path):
+        if candidate is not None and not candidate.exists():
+            if args.json:
+                print(json.dumps({"error": "file_not_found", "path": str(candidate)}, ensure_ascii=False))
+            else:
+                console_err.print(t("seq_file_not_found", path=str(candidate)), style="bold red")
+            return EXIT_ARGUMENT_ERROR
 
     output_dir = Path(str(params["output"])) if params["output"] else None
     outdir = Path(str(params["outdir"])) if params["outdir"] else None
@@ -434,6 +471,8 @@ def cmd_qc(args: argparse.Namespace) -> int:
     try:
         success = run_qc_pipeline(
             input_path,
+            input_r1=input_r1_path,
+            input_r2=input_r2_path,
             output_dir=output_dir,
             outdir=outdir,
             adapter=adapter,
@@ -443,10 +482,14 @@ def cmd_qc(args: argparse.Namespace) -> int:
         )
         if success:
             if args.json:
-                final_outdir = str(outdir or output_dir or _default_workflow_outdir("qc", input_path))
+                anchor = input_path or input_r1_path
+                assert anchor is not None
+                final_outdir = str(outdir or output_dir or _default_workflow_outdir("qc", anchor))
                 payload = {
                     "status": "success",
-                    "input": str(input_path),
+                    "input": str(input_path) if input_path else None,
+                    "input_r1": str(input_r1_path) if input_r1_path else None,
+                    "input_r2": str(input_r2_path) if input_r2_path else None,
                     "outdir": final_outdir,
                     "output": str(Path(final_outdir) / "results"),
                     "metadata": str(Path(final_outdir) / "metadata.json"),
@@ -455,7 +498,9 @@ def cmd_qc(args: argparse.Namespace) -> int:
                 print(json.dumps(payload, ensure_ascii=False))
             return EXIT_SUCCESS
         else:
-            metadata_path = Path(str(outdir or output_dir or _default_workflow_outdir("qc", input_path))) / "metadata.json"
+            anchor = input_path or input_r1_path
+            assert anchor is not None
+            metadata_path = Path(str(outdir or output_dir or _default_workflow_outdir("qc", anchor))) / "metadata.json"
             _print_failure_diagnostics(metadata_path, as_json=args.json)
             return EXIT_RUNTIME_ERROR
     except PreflightError as exc:
@@ -477,7 +522,7 @@ def cmd_align(args: argparse.Namespace) -> int:
         params = _merge_workflow_args(
             args,
             "align",
-            {"ref": None, "input": None, "output": None, "outdir": None, "threads": 1, "resume": False},
+            {"ref": None, "input": None, "input_r1": None, "input_r2": None, "output": None, "outdir": None, "threads": 1, "resume": False},
         )
     except ConfigError as exc:
         if args.json:
@@ -486,16 +531,28 @@ def cmd_align(args: argparse.Namespace) -> int:
             console_err.print(f"Error: {exc}", style="bold red")
         return EXIT_ARGUMENT_ERROR
 
-    if not params["ref"] or not params["input"]:
-        missing = "ref" if not params["ref"] else "input"
+    inputs = _validate_single_or_paired_inputs(
+        input_value=params["input"],
+        input_r1_value=params["input_r1"],
+        input_r2_value=params["input_r2"],
+        workflow="align",
+    )
+    if isinstance(inputs, str):
         if args.json:
-            print(json.dumps({"error": "missing_required", "field": missing}, ensure_ascii=False))
+            print(_json_error_payload("invalid_input_combination", message=str(inputs)))
         else:
-            console_err.print(f"Error: {missing} is required (CLI or config)", style="bold red")
+            console_err.print(f"Error: {inputs}", style="bold red")
+        return EXIT_ARGUMENT_ERROR
+
+    if not params["ref"]:
+        if args.json:
+            print(_json_error_payload("missing_required", field="ref"))
+        else:
+            console_err.print("Error: ref is required (CLI or config)", style="bold red")
         return EXIT_ARGUMENT_ERROR
 
     ref_path = Path(str(params["ref"]))
-    input_path = Path(str(params["input"]))
+    input_path, input_r1_path, input_r2_path = inputs
     threads = int(params["threads"])
     resume = bool(params["resume"])
 
@@ -507,12 +564,13 @@ def cmd_align(args: argparse.Namespace) -> int:
             console_err.print(t("seq_file_not_found", path=str(ref_path)), style="bold red")
         return EXIT_ARGUMENT_ERROR
 
-    if not input_path.exists():
-        if args.json:
-            print(json.dumps({"error": "file_not_found", "path": str(input_path)}, ensure_ascii=False))
-        else:
-            console_err.print(t("seq_file_not_found", path=str(input_path)), style="bold red")
-        return EXIT_ARGUMENT_ERROR
+    for candidate in (input_path, input_r1_path, input_r2_path):
+        if candidate is not None and not candidate.exists():
+            if args.json:
+                print(json.dumps({"error": "file_not_found", "path": str(candidate)}, ensure_ascii=False))
+            else:
+                console_err.print(t("seq_file_not_found", path=str(candidate)), style="bold red")
+            return EXIT_ARGUMENT_ERROR
 
     if threads <= 0:
         if args.json:
@@ -528,6 +586,8 @@ def cmd_align(args: argparse.Namespace) -> int:
         stats = run_alignment_pipeline(
             ref_path,
             input_path,
+            input_r1=input_r1_path,
+            input_r2=input_r2_path,
             output=output_path,
             outdir=outdir,
             threads=threads,
@@ -536,13 +596,17 @@ def cmd_align(args: argparse.Namespace) -> int:
         )
         if stats is not None:
             if args.json:
+                anchor = input_path or input_r1_path
+                assert anchor is not None
                 payload = {
                     "status": "success",
                     "ref": str(ref_path),
-                    "input": str(input_path),
-                    "output": str(_resolve_align_json_output(input_path, output_path, outdir)),
-                    "outdir": str(outdir or _default_workflow_outdir("align", input_path)),
-                    "metadata": str((outdir or _default_workflow_outdir("align", input_path)) / "metadata.json"),
+                    "input": str(input_path) if input_path else None,
+                    "input_r1": str(input_r1_path) if input_r1_path else None,
+                    "input_r2": str(input_r2_path) if input_r2_path else None,
+                    "output": str(_resolve_align_json_output(anchor, output_path, outdir)),
+                    "outdir": str(outdir or _default_workflow_outdir("align", anchor)),
+                    "metadata": str((outdir or _default_workflow_outdir("align", anchor)) / "metadata.json"),
                     "resume_used": resume,
                     "stats": {
                         "total": stats["total"],
@@ -554,7 +618,9 @@ def cmd_align(args: argparse.Namespace) -> int:
                 print(json.dumps(payload, ensure_ascii=False))
             return EXIT_SUCCESS
         else:
-            metadata_path = (outdir or _default_workflow_outdir("align", input_path)) / "metadata.json"
+            anchor = input_path or input_r1_path
+            assert anchor is not None
+            metadata_path = (outdir or _default_workflow_outdir("align", anchor)) / "metadata.json"
             _print_failure_diagnostics(metadata_path, as_json=args.json)
             return EXIT_RUNTIME_ERROR
     except PreflightError as exc:
@@ -796,6 +862,8 @@ def main() -> int:
     parser_qc = subparsers.add_parser("qc", help="Run QC pipeline (FastQC + Trimmomatic)")
     parser_qc.add_argument("--config", help="YAML config file for qc workflow")
     parser_qc.add_argument("--input", "-i", help="Input FASTQ file")
+    parser_qc.add_argument("--input-r1", help="Input R1 FASTQ file for paired-end mode")
+    parser_qc.add_argument("--input-r2", help="Input R2 FASTQ file for paired-end mode")
     parser_qc.add_argument("--output", "-o", help="Legacy run root directory (same effect as --outdir)")
     parser_qc.add_argument("--outdir", help="Run output root directory (default: input_dir/qc_run)")
     parser_qc.add_argument("--resume", action="store_true", help="Resume from the latest valid QC checkpoint")
@@ -817,6 +885,8 @@ def main() -> int:
     parser_align.add_argument("--config", help="YAML config file for alignment workflow")
     parser_align.add_argument("--ref", "-r", help="Reference genome FASTA file")
     parser_align.add_argument("--input", "-i", help="Input reads file (FASTQ)")
+    parser_align.add_argument("--input-r1", help="Input R1 FASTQ file for paired-end mode")
+    parser_align.add_argument("--input-r2", help="Input R2 FASTQ file for paired-end mode")
     parser_align.add_argument("--output", "-o", help="Output BAM file written under results/ unless absolute path is given")
     parser_align.add_argument("--outdir", help="Run output root directory (default: input_dir/align_run)")
     parser_align.add_argument("--resume", action="store_true", help="Resume from the latest valid alignment checkpoint")
