@@ -35,7 +35,7 @@ License text: [MIT License](LICENSE)
   - Tabular result output (`outfmt 6`) for downstream analysis
 - **QC Pipeline**: Integrated FastQC + Trimmomatic workflow for single-end and paired-end reads
 - **Run Inspection**: `bioflow inspect` summarizes run status, critical outputs, failed steps, and log locations
-- **HTML Run Reports**: Export one or more workflow runs into a portable single-file HTML summary
+- **HTML Run Reports**: Export one or more workflow runs into a portable single-file HTML summary with overview stats, filtering, and run navigation
 - **Failure Diagnostics**: Unified failure output across workflows with failed step, failed command, stderr tail, and direct log paths
 - **YAML Workflow Config**: run QC / alignment / search from reusable config files
 - **Structured Output**: `--json` output for automation pipelines
@@ -224,7 +224,10 @@ bioflow --json batch -i ./data -o ./formatted
 
 - `bioflow report --input <run_dir>` exports a single-run HTML report from `metadata.json`
 - `bioflow report --input <parent_dir>` scans immediate subdirectories and combines multiple runs into one report
-- the generated report includes workflow summary, input details, runtime environment, tool versions, logs, failure summary, failure details, and per-step status
+- the generated report now includes overview statistics, workflow/status filters, run navigation, and workflow-specific core output summaries
+- QC reports summarize trimmed outputs and FastQC result directories
+- alignment reports summarize BAM / BAI / flagstat outputs and key mapping metrics
+- search reports summarize TSV / summary outputs, hit count, and best hit
 - TUI mode also exposes report export from the main menu
 
 ### Batch Concurrency
@@ -251,7 +254,7 @@ pip install -e .[dev]
 
 ## Project Status
 
-Current development version: **v0.7.0**
+Current development version: **v0.7.1**
 
 Release history and notes: [GitHub Releases](https://github.com/BioCael-Dev/BioFlow-CLI/releases)
 

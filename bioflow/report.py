@@ -42,6 +42,18 @@ class RunInfo:
     input_details: dict[str, Any]
     failure_summary: str
     failure_details: dict[str, Any]
+    stats: dict[str, Any]
+    summary: dict[str, Any]
+
+
+@dataclass
+class ReportOverview:
+    """Aggregated summary for a report page."""
+
+    total_runs: int
+    status_counts: dict[str, int]
+    workflow_counts: dict[str, int]
+    workflow_status_counts: dict[str, dict[str, int]]
 
 
 def parse_metadata(run_dir: Path) -> RunInfo:
@@ -82,6 +94,8 @@ def parse_metadata(run_dir: Path) -> RunInfo:
         input_details=data.get("input_details", {}),
         failure_summary=data.get("failure_summary", ""),
         failure_details=data.get("failure_details", {}),
+        stats=data.get("stats", {}) if isinstance(data.get("stats", {}), dict) else {},
+        summary=data.get("summary", {}) if isinstance(data.get("summary", {}), dict) else {},
     )
 
 
@@ -125,15 +139,33 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Ar
      line-height:1.6;color:#1a1a1a;background:#f8f9fa;padding:2rem}
 .container{max-width:960px;margin:0 auto}
 h1{color:#2c3e50;margin-bottom:.5rem}
+h2{font-size:1rem;color:#2c3e50;margin-bottom:.75rem}
 .subtitle{color:#7f8c8d;margin-bottom:2rem;font-size:.9rem}
+.overview{background:#fff;border:1px solid #e1e4e8;border-radius:10px;padding:1.25rem;margin-bottom:1.5rem;
+          box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.75rem;margin-bottom:1rem}
+.stat-card{border:1px solid #e5e7eb;border-radius:10px;padding:.9rem;background:linear-gradient(180deg,#fff,#f7fafc)}
+.stat-label{font-size:.82rem;color:#6b7280}
+.stat-value{font-size:1.45rem;font-weight:700;color:#1f2937}
+.overview-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem}
+.overview-panel{border:1px solid #e5e7eb;border-radius:10px;padding:1rem;background:#fcfcfd}
+.filter-row{display:flex;flex-wrap:wrap;gap:.5rem}
+.filter-btn,.nav-link{display:inline-flex;align-items:center;gap:.35rem;border:1px solid #d0d7de;
+                      border-radius:999px;background:#fff;color:#334155;text-decoration:none;padding:.35rem .7rem;
+                      font-size:.82rem;cursor:pointer}
+.filter-btn.is-active{background:#0f766e;color:#fff;border-color:#0f766e}
+.nav-list{display:flex;flex-wrap:wrap;gap:.5rem}
 .run-card{background:#fff;border:1px solid #e1e4e8;border-radius:8px;
           padding:1.5rem;margin-bottom:1.5rem;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.run-card.is-hidden{display:none}
 .run-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem}
 .run-title{font-size:1.15rem;font-weight:600;color:#2c3e50}
 .badge{padding:.2rem .6rem;border-radius:12px;font-size:.8rem;font-weight:500;color:#fff}
 .badge-success{background:#27ae60}
 .badge-failed{background:#e74c3c}
 .badge-running{background:#f39c12}
+.badge-pending{background:#95a5a6}
+.badge-skipped{background:#3498db}
 table{width:100%;border-collapse:collapse;margin:.8rem 0;font-size:.9rem}
 th,td{text-align:left;padding:.45rem .6rem;border-bottom:1px solid #eee}
 th{background:#f1f3f5;font-weight:600;color:#495057}
@@ -145,8 +177,48 @@ th{background:#f1f3f5;font-weight:600;color:#495057}
 .status-pending{color:#95a5a6}
 .status-skipped{color:#3498db}
 .status-running{color:#f39c12}
+pre{white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.82rem}
 footer{text-align:center;color:#95a5a6;font-size:.8rem;margin-top:2rem;padding-top:1rem;
        border-top:1px solid #e1e4e8}
+"""
+
+_JS = """\
+(() => {
+  const cards = Array.from(document.querySelectorAll('.run-card'));
+  const buttons = Array.from(document.querySelectorAll('.filter-btn'));
+  let workflow = 'all';
+  let status = 'all';
+
+  function syncButtons() {
+    buttons.forEach((btn) => {
+      const group = btn.dataset.group;
+      const value = btn.dataset.value;
+      const active = (group === 'workflow' && value === workflow) || (group === 'status' && value === status);
+      btn.classList.toggle('is-active', active);
+    });
+  }
+
+  function applyFilters() {
+    cards.forEach((card) => {
+      const workflowMatch = workflow === 'all' || card.dataset.workflow === workflow;
+      const statusMatch = status === 'all' || card.dataset.status === status;
+      card.classList.toggle('is-hidden', !(workflowMatch && statusMatch));
+    });
+    syncButtons();
+  }
+
+  buttons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const group = btn.dataset.group;
+      const value = btn.dataset.value;
+      if (group === 'workflow') workflow = value;
+      if (group === 'status') status = value;
+      applyFilters();
+    });
+  });
+
+  applyFilters();
+})();
 """
 
 
@@ -160,6 +232,10 @@ def _badge_class(status: str) -> str:
         return "badge-success"
     if status == "failed":
         return "badge-failed"
+    if status == "skipped":
+        return "badge-skipped"
+    if status == "pending":
+        return "badge-pending"
     return "badge-running"
 
 
@@ -211,7 +287,136 @@ def _render_steps_table(steps: dict[str, Any]) -> str:
     return f"<table>{header}{''.join(rows)}</table>"
 
 
-def _render_run_card(run: RunInfo) -> str:
+def _run_dom_id(run: RunInfo, index: int) -> str:
+    """Stable DOM id for one run card."""
+    return f"run-{run.workflow.lower()}-{index + 1}"
+
+
+def _build_overview(runs: list[RunInfo]) -> ReportOverview:
+    """Compute aggregate report stats."""
+    status_counts: dict[str, int] = {}
+    workflow_counts: dict[str, int] = {}
+    workflow_status_counts: dict[str, dict[str, int]] = {}
+
+    for run in runs:
+        status_counts[run.status] = status_counts.get(run.status, 0) + 1
+        workflow_counts[run.workflow] = workflow_counts.get(run.workflow, 0) + 1
+        workflow_status = workflow_status_counts.setdefault(run.workflow, {})
+        workflow_status[run.status] = workflow_status.get(run.status, 0) + 1
+
+    return ReportOverview(
+        total_runs=len(runs),
+        status_counts=status_counts,
+        workflow_counts=workflow_counts,
+        workflow_status_counts=workflow_status_counts,
+    )
+
+
+def _core_outputs(run: RunInfo) -> dict[str, Any]:
+    """Return workflow-specific core outputs/summary for the report."""
+    outputs = dict(run.outputs)
+
+    if run.workflow == "qc":
+        keys = (
+            "trimmed",
+            "trimmed_r1",
+            "trimmed_r2",
+            "unpaired_r1",
+            "unpaired_r2",
+            "fastqc_pre",
+            "fastqc_post",
+        )
+        return {key: outputs[key] for key in keys if key in outputs}
+
+    if run.workflow == "align":
+        core = {key: outputs[key] for key in ("bam", "bai", "flagstat") if key in outputs}
+        if "mapping_rate" in run.stats:
+            core["mapping_rate"] = f"{float(run.stats['mapping_rate']):.2%}"
+        if "mapped" in run.stats:
+            core["mapped"] = run.stats["mapped"]
+        return core
+
+    if run.workflow == "search":
+        core = {key: outputs[key] for key in ("tsv", "summary") if key in outputs}
+        if "hit_count" in run.summary:
+            core["hit_count"] = run.summary["hit_count"]
+        best_hit = run.summary.get("best_hit")
+        if isinstance(best_hit, dict) and "subject_id" in best_hit:
+            core["best_hit"] = best_hit["subject_id"]
+        return core
+
+    return outputs
+
+
+def _render_overview(overview: ReportOverview, runs: list[RunInfo]) -> str:
+    """Render report overview cards, workflow matrix, filters, and navigation."""
+    workflows = sorted(overview.workflow_counts)
+    workflow_rows = "".join(
+        (
+            f"<tr><td>{_esc(workflow.upper())}</td>"
+            f"<td>{_esc(overview.workflow_counts[workflow])}</td>"
+            f"<td>{_esc(overview.workflow_status_counts.get(workflow, {}).get('success', 0))}</td>"
+            f"<td>{_esc(overview.workflow_status_counts.get(workflow, {}).get('failed', 0))}</td></tr>"
+        )
+        for workflow in workflows
+    )
+    workflow_table = (
+        "<table>"
+        f"<tr><th>{_esc(t('report_field_workflow'))}</th>"
+        f"<th>{_esc(t('report_overview_total'))}</th>"
+        f"<th>{_esc(t('report_overview_success'))}</th>"
+        f"<th>{_esc(t('report_overview_failed'))}</th></tr>"
+        f"{workflow_rows}</table>"
+        if workflow_rows
+        else "<p>-</p>"
+    )
+
+    workflow_filters = "".join(
+        f'<button class="filter-btn" type="button" data-group="workflow" data-value="{_esc(workflow)}">{_esc(workflow.upper())}</button>'
+        for workflow in workflows
+    )
+    status_filters = "".join(
+        f'<button class="filter-btn" type="button" data-group="status" data-value="{status}">{_esc(t(f"report_status_{status}"))}</button>'
+        for status in ("success", "failed", "running", "pending", "skipped")
+        if overview.status_counts.get(status, 0) > 0
+    )
+    nav_links = "".join(
+        (
+            f'<a class="nav-link" href="#{_run_dom_id(run, index)}">'
+            f"{_esc(run.workflow.upper())}"
+            f'<span class="badge {_badge_class(run.status)}">{_esc(run.status)}</span>'
+            "</a>"
+        )
+        for index, run in enumerate(runs)
+    )
+
+    return "\n".join(
+        [
+            '<section class="overview">',
+            '<div class="stat-grid">',
+            f'<div class="stat-card"><div class="stat-label">{_esc(t("report_overview_total"))}</div><div class="stat-value">{overview.total_runs}</div></div>',
+            f'<div class="stat-card"><div class="stat-label">{_esc(t("report_overview_success"))}</div><div class="stat-value">{overview.status_counts.get("success", 0)}</div></div>',
+            f'<div class="stat-card"><div class="stat-label">{_esc(t("report_overview_failed"))}</div><div class="stat-value">{overview.status_counts.get("failed", 0)}</div></div>',
+            f'<div class="stat-card"><div class="stat-label">{_esc(t("report_overview_running"))}</div><div class="stat-value">{overview.status_counts.get("running", 0)}</div></div>',
+            '</div>',
+            '<div class="overview-grid">',
+            f'<div class="overview-panel"><h2>{_esc(t("report_section_overview"))}</h2>{workflow_table}</div>',
+            (
+                f'<div class="overview-panel"><h2>{_esc(t("report_section_filters"))}</h2>'
+                f'<div class="section-title">{_esc(t("report_filter_workflow"))}</div><div class="filter-row">'
+                f'<button class="filter-btn is-active" type="button" data-group="workflow" data-value="all">{_esc(t("report_filter_all"))}</button>{workflow_filters}'
+                f'</div><div class="section-title">{_esc(t("report_filter_status"))}</div><div class="filter-row">'
+                f'<button class="filter-btn is-active" type="button" data-group="status" data-value="all">{_esc(t("report_filter_all"))}</button>{status_filters}'
+                '</div></div>'
+            ),
+            f'<div class="overview-panel"><h2>{_esc(t("report_section_navigation"))}</h2><div class="nav-list">{nav_links}</div></div>',
+            '</div>',
+            '</section>',
+        ]
+    )
+
+
+def _render_run_card(run: RunInfo, index: int) -> str:
     """Render a single RunInfo as an HTML card."""
     badge = f'<span class="badge {_badge_class(run.status)}">{_esc(run.status)}</span>'
     workflow_label = run.workflow.upper()
@@ -224,14 +429,18 @@ def _render_run_card(run: RunInfo) -> str:
         t("report_field_completed"): run.completed_at or "-",
         t("report_field_run_dir"): str(run.run_dir),
     }
+    core_outputs = _core_outputs(run)
+    run_id = _run_dom_id(run, index)
 
     sections = [
-        f'<div class="run-card">',
+        f'<div class="run-card" id="{_esc(run_id)}" data-workflow="{_esc(run.workflow)}" data-status="{_esc(run.status)}">',
         f'<div class="run-header"><span class="run-title">{_esc(workflow_label)}</span>{badge}</div>',
         f'<div class="section-title">{_esc(t("report_section_summary"))}</div>',
         _render_kv_table(summary_rows),
         f'<div class="section-title">{_esc(t("report_section_params"))}</div>',
         _render_kv_table(run.parameters),
+        f'<div class="section-title">{_esc(t("report_section_core_outputs"))}</div>',
+        _render_kv_table(core_outputs),
         f'<div class="section-title">{_esc(t("report_section_inputs"))}</div>',
         _render_kv_table(run.inputs),
         f'<div class="section-title">{_esc(t("report_section_input_details"))}</div>',
@@ -270,7 +479,8 @@ class DefaultHTMLTemplate:
 
     def render(self, runs: list[RunInfo], title: str) -> str:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        cards = "\n".join(_render_run_card(r) for r in runs)
+        overview = _build_overview(runs)
+        cards = "\n".join(_render_run_card(run, index) for index, run in enumerate(runs))
         subtitle = t("report_subtitle", count=len(runs), time=now)
         return (
             "<!DOCTYPE html>\n"
@@ -283,8 +493,10 @@ class DefaultHTMLTemplate:
             '<div class="container">\n'
             f"<h1>{_esc(title)}</h1>\n"
             f'<p class="subtitle">{_esc(subtitle)}</p>\n'
+            f"{_render_overview(overview, runs)}\n"
             f"{cards}\n"
             f'<footer>Generated by BioFlow-CLI v{__version__}</footer>\n'
+            f"<script>{_JS}</script>\n"
             "</div>\n</body>\n</html>\n"
         )
 
