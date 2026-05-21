@@ -31,6 +31,7 @@ BioFlow-CLI 是一个基于 **MIT 许可证** 发布的 **开源项目**。
 - **QC 流程** — 集成 FastQC + Trimmomatic 的质量控制流水线，支持单端/双端输入
 - **运行检查** — 提供 `bioflow inspect`，可汇总运行状态、关键输出、失败步骤与日志位置
 - **HTML 运行报告** — 可将单次或多次工作流运行导出为单文件 HTML 汇总报告，并提供概览统计、筛选和运行导航
+- **项目批量运行** — 提供 `bioflow project`，可在一个 YAML 中混合执行 QC / 比对 / 检索样本，并生成项目级汇总与 HTML 报告
 - **失败诊断** — 为失败的 workflow 提供统一 CLI 诊断输出，包括失败步骤、失败命令、stderr 摘要和日志路径
 - **YAML 工作流配置** — 可通过配置文件复用 QC / 比对 / 检索参数
 - **结构化输出** — 支持 `--json` 输出，便于自动化集成和脚本调用
@@ -171,6 +172,12 @@ bioflow search --db ref.fa --query query.fa --output hits.tsv --top 3
 # 从配置文件运行 BLAST 检索
 bioflow search --config examples/search.yml
 
+# 从单个 YAML 运行项目级批处理
+bioflow project --config examples/project.yml
+
+# 某个样本失败后继续后续样本
+bioflow project --config examples/project.yml --continue-on-error
+
 # 恢复中断的 BLAST 检索
 bioflow search --db ref.fa --query query.fa --outdir runs/search-001 --resume
 
@@ -225,9 +232,12 @@ bioflow --json batch -i ./data -o ./formatted
 - `bioflow qc --config qc.yml`
 - `bioflow align --config align.yml`
 - `bioflow search --config search.yml`
+- `bioflow project --config project.yml`
 - 参数优先级为：CLI 显式参数 > YAML 配置 > 内置默认值
 - `qc` 与 `align` 支持二选一输入方式：`input` 或 `input_r1` + `input_r2`
 - `input` 不能与 `input_r1` / `input_r2` 混用
+- `project` 配置可选顶层 `project:` 段，并支持 `outdir`、`continue_on_error`、`report_title`、`samples`
+- `samples` 中每个条目都必须包含 `sample_id`、`workflow` 以及对应 workflow 的必需字段
 - 示例模板已放在 `examples/`
 
 #### 工作流输出目录规范
@@ -235,6 +245,8 @@ bioflow --json batch -i ./data -o ./formatted
 - `qc`、`align`、`search` 现在统一使用标准运行目录布局
 - 可通过 `--outdir` 指定运行根目录；未指定时会在输入文件旁自动创建 `qc_run`、`align_run` 或 `search_run`
 - 每次运行都会生成 `logs/`、`results/`、`tmp/` 和 `metadata.json`
+- `bioflow project` 会在项目根目录下生成按样本划分的运行目录，例如 `001-sample-qc-qc`
+- 项目级运行还会额外生成 `project_summary.json` 和 `project_report.html`
 - `metadata.json` 现在额外记录输入文件大小 / 修改时间 / sha256、运行环境、工具版本和失败摘要
 - 双端 `qc` 会额外记录 `trimmed_r1`、`trimmed_r2`、`unpaired_r1`、`unpaired_r2`
 - 双端 `align` 会记录 `input_r1`、`input_r2`、`bam`、`bai` 以及成对比对统计
@@ -295,7 +307,7 @@ pip install -e .[dev]
 
 ## 项目状态
 
-当前开发版本：**v0.7.1**
+当前开发版本：**v0.7.2**
 
 ## 许可证
 

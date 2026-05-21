@@ -1,0 +1,26 @@
+project:
+  outdir: runs/project-001
+  continue_on_error: true
+  report_title: BioFlow Project Batch Report
+  samples:
+    - sample_id: sample-qc
+      workflow: qc
+      input_r1: reads_1.fastq
+      input_r2: reads_2.fastq
+      adapter: adapters.fa
+      minlen: 36
+    - sample_id: sample-align
+      workflow: align
+      ref: ref.fa
+      input_r1: reads_1.fastq
+      input_r2: reads_2.fastq
+      output: aligned.sorted.bam
+      threads: 4
+    - sample_id: sample-search
+      workflow: search
+      db: ref.fa
+      query: query.fa
+      output: hits.tsv
+      evalue: 1e-5
+      max_target_seqs: 20
+      top: 5

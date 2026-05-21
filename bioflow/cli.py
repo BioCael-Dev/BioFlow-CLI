@@ -21,11 +21,12 @@ from bioflow.bio_tasks import (
 )
 from bioflow.env_manager import BIO_TOOLS, _check_conda, _check_installed
 from bioflow.alignment import run_alignment_pipeline
-from bioflow.config import ConfigError, load_workflow_config
+from bioflow.config import ConfigError, load_project_config, load_workflow_config
 from bioflow.i18n import init_language, t
 from bioflow.inspect import inspect_run, render_inspection_text
 from bioflow.pipeline import run_qc_pipeline
 from bioflow.preflight import PreflightError
+from bioflow.project_batch import run_project_batch
 from bioflow.report import generate_report
 from bioflow.run_layout import format_failure_diagnostics
 from bioflow.search import run_blast_search
@@ -833,6 +834,63 @@ def cmd_search(args: argparse.Namespace) -> int:
         return EXIT_RUNTIME_ERROR
 
 
+def cmd_project(args: argparse.Namespace) -> int:
+    """处理 project 子命令：项目级多样本 workflow batch。"""
+    config_path = _resolve_config_path(getattr(args, "config", None))
+    if config_path is None:
+        if args.json:
+            print(json.dumps({"error": "missing_required", "field": "config"}, ensure_ascii=False))
+        else:
+            console_err.print("Error: config is required", style="bold red")
+        return EXIT_ARGUMENT_ERROR
+
+    try:
+        config = load_project_config(config_path)
+    except ConfigError as exc:
+        if args.json:
+            print(json.dumps({"error": "config_error", "message": str(exc)}, ensure_ascii=False))
+        else:
+            console_err.print(f"Error: {exc}", style="bold red")
+        return EXIT_ARGUMENT_ERROR
+
+    outdir = Path(args.outdir) if getattr(args, "outdir", None) else None
+    if getattr(args, "continue_on_error", False):
+        config["continue_on_error"] = True
+
+    try:
+        result = run_project_batch(
+            config_path=config_path,
+            project_config=config,
+            outdir=outdir,
+            quiet=args.quiet or args.json,
+        )
+    except Exception as exc:
+        if args.json:
+            print(json.dumps({"error": "runtime_error", "message": str(exc)}, ensure_ascii=False))
+        else:
+            console_err.print(t("error_unexpected", err=str(exc)), style="bold red")
+        return EXIT_RUNTIME_ERROR
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False))
+    elif not (args.quiet or args.json):
+        console_out.print(
+            t(
+                "project_batch_done",
+                root=result["project_root"],
+                planned=result["planned_sample_count"],
+                success=result["success_count"],
+                failed=result["failed_count"],
+                summary=result["summary"],
+                report=result["report"] or "-",
+            )
+        )
+
+    if result["failed_count"] and not result["continue_on_error"]:
+        return EXIT_RUNTIME_ERROR
+    return EXIT_SUCCESS
+
+
 def main() -> int:
     """CLI 主入口。"""
     parser = argparse.ArgumentParser(
@@ -914,6 +972,12 @@ def main() -> int:
     parser_report.add_argument("--output", "-o", help="Output HTML file (default: report.html)")
     parser_report.add_argument("--title", help="Custom report title")
 
+    # project 子命令
+    parser_project = subparsers.add_parser("project", help="Run project-level workflow batch from YAML")
+    parser_project.add_argument("--config", required=True, help="YAML project batch config file")
+    parser_project.add_argument("--outdir", help="Project output root directory (default: config_dir/project_run)")
+    parser_project.add_argument("--continue-on-error", "-c", action="store_true", help="Continue remaining samples when one sample fails")
+
     # inspect 子命令
     parser_inspect = subparsers.add_parser("inspect", help="Inspect run metadata and diagnostics")
     parser_inspect.add_argument("--input", "-i", required=True, help="Run directory containing metadata.json")
@@ -945,6 +1009,8 @@ def main() -> int:
         return cmd_search(args)
     elif args.command == "report":
         return cmd_report(args)
+    elif args.command == "project":
+        return cmd_project(args)
     elif args.command == "inspect":
         return cmd_inspect(args)
     else:

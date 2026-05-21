@@ -182,6 +182,9 @@ STRINGS = {
     # === Inspect ===
     "inspect_invalid_input": "Invalid run directory: {path}",
 
+    # === Project Batch ===
+    "project_batch_done": "Project batch completed. Root: {root} | Planned: {planned} | Success: {success} | Failed: {failed} | Summary: {summary} | Report: {report}",
+
     # === Batch Processing ===
     "batch_processing": "Batch processing files...",
     "batch_no_files": "No files found matching the pattern.",

@@ -36,6 +36,7 @@ License text: [MIT License](LICENSE)
 - **QC Pipeline**: Integrated FastQC + Trimmomatic workflow for single-end and paired-end reads
 - **Run Inspection**: `bioflow inspect` summarizes run status, critical outputs, failed steps, and log locations
 - **HTML Run Reports**: Export one or more workflow runs into a portable single-file HTML summary with overview stats, filtering, and run navigation
+- **Project Batch**: `bioflow project` executes mixed QC / alignment / search samples from one YAML file and emits a project summary plus combined HTML report
 - **Failure Diagnostics**: Unified failure output across workflows with failed step, failed command, stderr tail, and direct log paths
 - **YAML Workflow Config**: run QC / alignment / search from reusable config files
 - **Structured Output**: `--json` output for automation pipelines
@@ -128,6 +129,12 @@ bioflow search --db ref.fa --query query.fa --output hits.tsv --top 3
 # Run BLAST search from config
 bioflow search --config examples/search.yml
 
+# Run a mixed project batch from one YAML config
+bioflow project --config examples/project.yml
+
+# Continue other samples even if one sample fails
+bioflow project --config examples/project.yml --continue-on-error
+
 # Resume an interrupted BLAST search
 bioflow search --db ref.fa --query query.fa --outdir runs/search-001 --resume
 
@@ -184,9 +191,12 @@ bioflow --json batch -i ./data -o ./formatted
 - `bioflow qc --config qc.yml`
 - `bioflow align --config align.yml`
 - `bioflow search --config search.yml`
+- `bioflow project --config project.yml`
 - parameter precedence is: explicit CLI argument > YAML config > built-in default
 - `qc` and `align` support either `input` or the `input_r1` + `input_r2` pair
 - `input` cannot be combined with `input_r1` / `input_r2`
+- `project` config uses a top-level `project:` section optionally, and supports `outdir`, `continue_on_error`, `report_title`, and `samples`
+- each `samples` item requires `sample_id`, `workflow`, and that workflow's normal required fields
 - example templates are available in `examples/`
 
 ### Workflow Output Layout
@@ -194,6 +204,8 @@ bioflow --json batch -i ./data -o ./formatted
 - `qc`, `align`, and `search` now share a standard run directory layout
 - set `--outdir` to control the run root; if omitted, BioFlow-CLI creates `qc_run`, `align_run`, or `search_run` beside the input file
 - each run contains `logs/`, `results/`, `tmp/`, and `metadata.json`
+- `bioflow project` creates one project root with per-sample run directories such as `001-sample-qc-qc`
+- each project run also writes `project_summary.json` and `project_report.html`
 - metadata now records input file size / mtime / sha256, runtime environment, tool versions, and failure summary
 - paired-end `qc` metadata also records `trimmed_r1`, `trimmed_r2`, `unpaired_r1`, and `unpaired_r2`
 - paired-end `align` metadata records `input_r1`, `input_r2`, `bam`, `bai`, and paired flagstat metrics
@@ -254,7 +266,7 @@ pip install -e .[dev]
 
 ## Project Status
 
-Current development version: **v0.7.1**
+Current development version: **v0.7.2**
 
 Release history and notes: [GitHub Releases](https://github.com/BioCael-Dev/BioFlow-CLI/releases)
 

@@ -182,6 +182,9 @@ STRINGS = {
     # === Inspect ===
     "inspect_invalid_input": "运行目录无效：{path}",
 
+    # === 项目批处理 ===
+    "project_batch_done": "项目批量运行完成。目录：{root} | 计划样本：{planned} | 成功：{success} | 失败：{failed} | 汇总：{summary} | 报告：{report}",
+
     # === 批量处理 ===
     "batch_processing": "批量处理文件中...",
     "batch_no_files": "未找到匹配的文件。",
