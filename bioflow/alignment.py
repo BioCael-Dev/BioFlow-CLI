@@ -476,6 +476,7 @@ def run_alignment_pipeline(
     outdir: Path | None = None,
     threads: int = 1,
     resume: bool = False,
+    execution: dict[str, object] | None = None,
     cli_mode: bool = False,
     skip_preflight: bool = False,
 ) -> dict[str, int | float] | None:
@@ -539,7 +540,12 @@ def run_alignment_pipeline(
             layout,
             status=status,
             command="align",
-            parameters={"threads": threads, "resume": resume, "paired": paired_mode},
+            parameters={
+                "threads": threads,
+                "resume": resume,
+                "paired": paired_mode,
+                "execution": execution or {"profile": "local", "resources": {"threads": threads}, "source": "default"},
+            },
             inputs=(
                 {"ref": str(ref), "input_r1": str(input_r1), "input_r2": str(input_r2)}
                 if paired_mode

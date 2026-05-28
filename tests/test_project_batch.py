@@ -4,7 +4,7 @@ from pathlib import Path
 
 import bioflow.cli as cli
 import bioflow.project_batch as project_batch
-from bioflow.config import ConfigError, load_project_config
+from bioflow.config import ConfigError, load_project_config, merge_project_sample_defaults
 
 
 def test_load_project_config_accepts_wrapped_project_section(tmp_path: Path) -> None:
@@ -16,6 +16,9 @@ def test_load_project_config_accepts_wrapped_project_section(tmp_path: Path) -> 
                 "  outdir: runs/project-001",
                 "  continue_on_error: true",
                 "  report_title: Demo",
+                "  profile: workstation",
+                "  threads: 8",
+                "  memory: 16G",
                 "  samples:",
                 "    - sample_id: sample-qc",
                 "      workflow: qc",
@@ -34,6 +37,9 @@ def test_load_project_config_accepts_wrapped_project_section(tmp_path: Path) -> 
     assert config["outdir"] == "runs/project-001"
     assert config["continue_on_error"] is True
     assert config["report_title"] == "Demo"
+    assert config["profile"] == "workstation"
+    assert config["threads"] == 8
+    assert config["memory"] == "16G"
     assert len(config["samples"]) == 2
 
 
@@ -117,6 +123,11 @@ def test_run_project_batch_writes_summary_and_report(tmp_path: Path, monkeypatch
         "outdir": str(project_root),
         "continue_on_error": False,
         "report_title": "Demo Project",
+        "profile": "workstation",
+        "threads": 4,
+        "memory": "8G",
+        "queue": "short",
+        "time_limit": "02:00:00",
         "samples": [
             {"sample_id": "sample-qc", "workflow": "qc", "input": "reads.fastq"},
             {"sample_id": "sample-search", "workflow": "search", "db": "ref.fa", "query": "query.fa"},
@@ -190,6 +201,11 @@ def test_run_project_batch_continue_on_error_keeps_running(tmp_path: Path, monke
         "outdir": str(project_root),
         "continue_on_error": True,
         "report_title": None,
+        "profile": "workstation",
+        "threads": 2,
+        "memory": "4G",
+        "queue": None,
+        "time_limit": None,
         "samples": [
             {"sample_id": "sample-qc", "workflow": "qc", "input": "reads.fastq"},
             {"sample_id": "sample-align", "workflow": "align", "ref": "ref.fa", "input": "reads.fastq"},
@@ -254,6 +270,25 @@ def test_run_project_batch_continue_on_error_keeps_running(tmp_path: Path, monke
     assert calls == ["001-sample-qc-qc", "002-sample-align-align"]
 
 
+def test_merge_project_sample_defaults_inherits_execution_values() -> None:
+    project_config = {
+        "profile": "workstation",
+        "threads": 8,
+        "memory": "16G",
+        "queue": "short",
+        "time_limit": "04:00:00",
+    }
+    sample = {"sample_id": "sample-qc", "workflow": "qc", "input": "reads.fastq"}
+
+    merged = merge_project_sample_defaults(project_config, sample)
+
+    assert merged["profile"] == "workstation"
+    assert merged["threads"] == 8
+    assert merged["memory"] == "16G"
+    assert merged["queue"] == "short"
+    assert merged["time_limit"] == "04:00:00"
+
+
 def test_cmd_project_json_outputs_payload(tmp_path: Path, monkeypatch, capsys) -> None:
     config_path = tmp_path / "project.yml"
     config_path.write_text("samples: []\n", encoding="utf-8")
@@ -294,6 +329,11 @@ def test_cmd_project_json_outputs_payload(tmp_path: Path, monkeypatch, capsys) -
             config=str(config_path),
             outdir=None,
             continue_on_error=False,
+            profile=None,
+            threads=None,
+            memory=None,
+            queue=None,
+            time_limit=None,
         )
     )
 
@@ -342,7 +382,75 @@ def test_cmd_project_returns_runtime_error_when_failure_stops_batch(tmp_path: Pa
             config=str(config_path),
             outdir=None,
             continue_on_error=False,
+            profile=None,
+            threads=None,
+            memory=None,
+            queue=None,
+            time_limit=None,
         )
     )
 
     assert exit_code == cli.EXIT_RUNTIME_ERROR
+
+
+def test_cmd_project_overrides_execution_defaults_from_cli(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "project.yml"
+    config_path.write_text("samples: []\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        cli,
+        "load_project_config",
+        lambda _path: {
+            "outdir": None,
+            "continue_on_error": False,
+            "report_title": None,
+            "profile": "local",
+            "threads": 1,
+            "memory": None,
+            "queue": None,
+            "time_limit": None,
+            "samples": [{"sample_id": "sample-qc", "workflow": "qc", "input": "reads.fastq"}],
+        },
+    )
+
+    def fake_run_project_batch(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs["project_config"])
+        return {
+            "status": "success",
+            "project_root": str(tmp_path / "runs" / "project-override"),
+            "config": str(config_path),
+            "summary": str(tmp_path / "runs" / "project-override" / "project_summary.json"),
+            "report": "",
+            "sample_count": 1,
+            "planned_sample_count": 1,
+            "success_count": 1,
+            "failed_count": 0,
+            "continue_on_error": True,
+            "samples": [],
+        }
+
+    monkeypatch.setattr(cli, "run_project_batch", fake_run_project_batch)
+
+    exit_code = cli.cmd_project(
+        Namespace(
+            quiet=True,
+            json=False,
+            config=str(config_path),
+            outdir=None,
+            continue_on_error=True,
+            profile="workstation",
+            threads=8,
+            memory="16G",
+            queue="short",
+            time_limit="04:00:00",
+        )
+    )
+
+    assert exit_code == cli.EXIT_SUCCESS
+    assert captured["continue_on_error"] is True
+    assert captured["profile"] == "workstation"
+    assert captured["threads"] == 8
+    assert captured["memory"] == "16G"
+    assert captured["queue"] == "short"
+    assert captured["time_limit"] == "04:00:00"

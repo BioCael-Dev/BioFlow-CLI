@@ -9,21 +9,82 @@ import yaml
 
 
 WORKFLOW_ALLOWED_KEYS: dict[str, set[str]] = {
-    "qc": {"input", "input_r1", "input_r2", "output", "outdir", "adapter", "minlen", "resume"},
-    "align": {"ref", "input", "input_r1", "input_r2", "output", "outdir", "threads", "resume"},
-    "search": {"db", "query", "output", "outdir", "evalue", "max_target_seqs", "top", "resume"},
+    "qc": {
+        "input", "input_r1", "input_r2", "output", "outdir", "adapter", "minlen", "resume",
+        "profile", "threads", "memory", "queue", "time_limit",
+    },
+    "align": {
+        "ref", "input", "input_r1", "input_r2", "output", "outdir", "threads", "resume",
+        "profile", "memory", "queue", "time_limit",
+    },
+    "search": {
+        "db", "query", "output", "outdir", "evalue", "max_target_seqs", "top", "resume",
+        "profile", "threads", "memory", "queue", "time_limit",
+    },
 }
 
-PROJECT_ALLOWED_KEYS: set[str] = {"outdir", "continue_on_error", "report_title", "samples"}
-PROJECT_SAMPLE_ALLOWED_KEYS: dict[str, set[str]] = {
-    "qc": {"sample_id", "workflow", "input", "input_r1", "input_r2", "adapter", "minlen", "resume"},
-    "align": {"sample_id", "workflow", "ref", "input", "input_r1", "input_r2", "output", "threads", "resume"},
-    "search": {"sample_id", "workflow", "db", "query", "output", "evalue", "max_target_seqs", "top", "resume"},
+PROJECT_ALLOWED_KEYS: set[str] = {
+    "outdir", "continue_on_error", "report_title", "profile", "threads", "memory",
+    "queue", "time_limit", "samples",
 }
+PROJECT_SAMPLE_ALLOWED_KEYS: dict[str, set[str]] = {
+    "qc": {
+        "sample_id", "workflow", "input", "input_r1", "input_r2", "adapter", "minlen", "resume",
+        "profile", "threads", "memory", "queue", "time_limit",
+    },
+    "align": {
+        "sample_id", "workflow", "ref", "input", "input_r1", "input_r2", "output", "threads", "resume",
+        "profile", "memory", "queue", "time_limit",
+    },
+    "search": {
+        "sample_id", "workflow", "db", "query", "output", "evalue", "max_target_seqs", "top", "resume",
+        "profile", "threads", "memory", "queue", "time_limit",
+    },
+}
+
+EXECUTION_OPTION_KEYS: tuple[str, ...] = ("profile", "threads", "memory", "queue", "time_limit")
 
 
 class ConfigError(Exception):
     """配置文件加载或校验失败。"""
+
+
+def _validate_execution_options(data: dict[str, Any], *, context: str) -> None:
+    """校验运行 profile 与资源参数。"""
+    profile = data.get("profile")
+    if profile is not None and (not isinstance(profile, str) or not profile.strip()):
+        raise ConfigError(f"{context} 'profile' must be a non-empty string")
+
+    memory = data.get("memory")
+    if memory is not None and (not isinstance(memory, str) or not memory.strip()):
+        raise ConfigError(f"{context} 'memory' must be a non-empty string")
+
+    queue = data.get("queue")
+    if queue is not None and (not isinstance(queue, str) or not queue.strip()):
+        raise ConfigError(f"{context} 'queue' must be a non-empty string")
+
+    time_limit = data.get("time_limit")
+    if time_limit is not None and (not isinstance(time_limit, str) or not time_limit.strip()):
+        raise ConfigError(f"{context} 'time_limit' must be a non-empty string")
+
+    threads = data.get("threads")
+    if threads is not None:
+        if not isinstance(threads, int):
+            raise ConfigError(f"{context} 'threads' must be an integer")
+        if threads <= 0:
+            raise ConfigError(f"{context} 'threads' must be positive")
+
+
+def merge_project_sample_defaults(
+    project_config: dict[str, Any],
+    sample: dict[str, Any],
+) -> dict[str, Any]:
+    """将项目级默认执行参数合并到样本级配置。"""
+    merged = dict(sample)
+    for key in EXECUTION_OPTION_KEYS:
+        if merged.get(key) is None and project_config.get(key) is not None:
+            merged[key] = project_config[key]
+    return merged
 
 
 def _validate_single_or_paired_inputs(
@@ -101,6 +162,7 @@ def load_workflow_config(config_path: Path, workflow: str) -> dict[str, Any]:
 
     if workflow in {"qc", "align"}:
         _validate_single_or_paired_inputs(data, workflow, context=f"{workflow} config")
+    _validate_execution_options(data, context=f"{workflow} config")
 
     return dict(data)
 
@@ -126,6 +188,7 @@ def load_project_config(config_path: Path) -> dict[str, Any]:
         raise ConfigError("Project config 'report_title' must be a string")
     if data.get("continue_on_error") is not None and not isinstance(data.get("continue_on_error"), bool):
         raise ConfigError("Project config 'continue_on_error' must be a boolean")
+    _validate_execution_options(data, context="Project config")
 
     samples = data.get("samples")
     if not isinstance(samples, list) or not samples:
@@ -154,6 +217,8 @@ def load_project_config(config_path: Path) -> dict[str, Any]:
                 f"Unknown config keys for project sample '{sample_id}': {', '.join(unknown_sample)}"
             )
 
+        _validate_execution_options(item, context=f"Project sample '{sample_id}'")
+
         if workflow in {"qc", "align"}:
             _validate_single_or_paired_inputs(
                 item,
@@ -179,5 +244,10 @@ def load_project_config(config_path: Path) -> dict[str, Any]:
         "outdir": data.get("outdir"),
         "continue_on_error": bool(data.get("continue_on_error", False)),
         "report_title": data.get("report_title"),
+        "profile": data.get("profile"),
+        "threads": data.get("threads"),
+        "memory": data.get("memory"),
+        "queue": data.get("queue"),
+        "time_limit": data.get("time_limit"),
         "samples": validated_samples,
     }

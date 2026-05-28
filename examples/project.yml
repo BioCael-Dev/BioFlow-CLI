@@ -2,6 +2,11 @@ project:
   outdir: runs/project-001
   continue_on_error: true
   report_title: BioFlow Project Batch Report
+  profile: workstation
+  threads: 4
+  memory: 8G
+  queue: short
+  time_limit: "02:00:00"
   samples:
     - sample_id: sample-qc
       workflow: qc
@@ -21,6 +26,7 @@ project:
       db: ref.fa
       query: query.fa
       output: hits.tsv
+      profile: local
       evalue: 1e-5
       max_target_seqs: 20
       top: 5

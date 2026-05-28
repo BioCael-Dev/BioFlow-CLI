@@ -208,6 +208,7 @@ def run_qc_pipeline(
     adapter: str | None = None,
     minlen: int = 36,
     resume: bool = False,
+    execution: dict[str, object] | None = None,
     cli_mode: bool = False,
     skip_preflight: bool = False,
 ) -> bool:
@@ -263,7 +264,13 @@ def run_qc_pipeline(
             layout,
             status=status,
             command="qc",
-            parameters={"adapter": adapter, "minlen": minlen, "resume": resume, "paired": paired_mode},
+            parameters={
+                "adapter": adapter,
+                "minlen": minlen,
+                "resume": resume,
+                "paired": paired_mode,
+                "execution": execution or {"profile": "local", "resources": {}, "source": "default"},
+            },
             inputs=(
                 {"input_r1": str(input_r1), "input_r2": str(input_r2)}
                 if paired_mode

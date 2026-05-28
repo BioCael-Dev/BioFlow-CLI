@@ -144,6 +144,20 @@ def _json_error_payload(error: str, **extra: Any) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _build_execution_context(params: dict[str, Any], *, source: str) -> dict[str, Any]:
+    """构造统一 execution 元数据。"""
+    return {
+        "profile": str(params.get("profile") or "local"),
+        "resources": {
+            "threads": int(params["threads"]) if params.get("threads") is not None else None,
+            "memory": str(params["memory"]) if params.get("memory") is not None else None,
+            "queue": str(params["queue"]) if params.get("queue") is not None else None,
+            "time_limit": str(params["time_limit"]) if params.get("time_limit") is not None else None,
+        },
+        "source": source,
+    }
+
+
 def cmd_seq(args: argparse.Namespace) -> int:
     """处理 seq 子命令：FASTA/FASTQ 格式化。"""
     input_path = Path(args.input)
@@ -424,7 +438,11 @@ def cmd_qc(args: argparse.Namespace) -> int:
         params = _merge_workflow_args(
             args,
             "qc",
-            {"input": None, "input_r1": None, "input_r2": None, "output": None, "outdir": None, "adapter": None, "minlen": 36, "resume": False},
+            {
+                "input": None, "input_r1": None, "input_r2": None, "output": None, "outdir": None,
+                "adapter": None, "minlen": 36, "resume": False, "profile": "local",
+                "threads": None, "memory": None, "queue": None, "time_limit": None,
+            },
         )
     except ConfigError as exc:
         if args.json:
@@ -461,6 +479,7 @@ def cmd_qc(args: argparse.Namespace) -> int:
     adapter = str(params["adapter"]) if params["adapter"] else None
     minlen = int(params["minlen"])
     resume = bool(params["resume"])
+    execution = _build_execution_context(params, source="cli_or_config")
 
     if minlen <= 0:
         if args.json:
@@ -479,6 +498,7 @@ def cmd_qc(args: argparse.Namespace) -> int:
             adapter=adapter,
             minlen=minlen,
             resume=resume,
+            execution=execution,
             cli_mode=True,
         )
         if success:
@@ -495,6 +515,7 @@ def cmd_qc(args: argparse.Namespace) -> int:
                     "output": str(Path(final_outdir) / "results"),
                     "metadata": str(Path(final_outdir) / "metadata.json"),
                     "resume_used": resume,
+                    "execution": execution,
                 }
                 print(json.dumps(payload, ensure_ascii=False))
             return EXIT_SUCCESS
@@ -523,7 +544,11 @@ def cmd_align(args: argparse.Namespace) -> int:
         params = _merge_workflow_args(
             args,
             "align",
-            {"ref": None, "input": None, "input_r1": None, "input_r2": None, "output": None, "outdir": None, "threads": 1, "resume": False},
+            {
+                "ref": None, "input": None, "input_r1": None, "input_r2": None, "output": None,
+                "outdir": None, "threads": 1, "resume": False, "profile": "local",
+                "memory": None, "queue": None, "time_limit": None,
+            },
         )
     except ConfigError as exc:
         if args.json:
@@ -556,6 +581,7 @@ def cmd_align(args: argparse.Namespace) -> int:
     input_path, input_r1_path, input_r2_path = inputs
     threads = int(params["threads"])
     resume = bool(params["resume"])
+    execution = _build_execution_context(params, source="cli_or_config")
 
     # 参数校验
     if not ref_path.exists():
@@ -593,6 +619,7 @@ def cmd_align(args: argparse.Namespace) -> int:
             outdir=outdir,
             threads=threads,
             resume=resume,
+            execution=execution,
             cli_mode=True,
         )
         if stats is not None:
@@ -609,6 +636,7 @@ def cmd_align(args: argparse.Namespace) -> int:
                     "outdir": str(outdir or _default_workflow_outdir("align", anchor)),
                     "metadata": str((outdir or _default_workflow_outdir("align", anchor)) / "metadata.json"),
                     "resume_used": resume,
+                    "execution": execution,
                     "stats": {
                         "total": stats["total"],
                         "mapped": stats["mapped"],
@@ -729,6 +757,11 @@ def cmd_search(args: argparse.Namespace) -> int:
                 "max_target_seqs": 10,
                 "top": 5,
                 "resume": False,
+                "profile": "local",
+                "threads": None,
+                "memory": None,
+                "queue": None,
+                "time_limit": None,
             },
         )
     except ConfigError as exc:
@@ -752,6 +785,7 @@ def cmd_search(args: argparse.Namespace) -> int:
     max_target_seqs = int(params["max_target_seqs"])
     top_n = int(params["top"])
     resume = bool(params["resume"])
+    execution = _build_execution_context(params, source="cli_or_config")
 
     if not db_path.exists():
         if args.json:
@@ -809,6 +843,7 @@ def cmd_search(args: argparse.Namespace) -> int:
             max_target_seqs=max_target_seqs,
             top_n=top_n,
             resume=resume,
+            execution=execution,
             cli_mode=True,
         )
         if result is None:
@@ -816,7 +851,7 @@ def cmd_search(args: argparse.Namespace) -> int:
             _print_failure_diagnostics(metadata_path, as_json=args.json)
             return EXIT_RUNTIME_ERROR
         if args.json:
-            print(json.dumps({"status": "success", **result}, ensure_ascii=False))
+            print(json.dumps({"status": "success", "execution": execution, **result}, ensure_ascii=False))
         elif not args.quiet:
             from bioflow.search import display_search_summary
 
@@ -856,6 +891,16 @@ def cmd_project(args: argparse.Namespace) -> int:
     outdir = Path(args.outdir) if getattr(args, "outdir", None) else None
     if getattr(args, "continue_on_error", False):
         config["continue_on_error"] = True
+    if getattr(args, "profile", None):
+        config["profile"] = args.profile
+    if getattr(args, "threads", None) is not None:
+        config["threads"] = args.threads
+    if getattr(args, "memory", None):
+        config["memory"] = args.memory
+    if getattr(args, "queue", None):
+        config["queue"] = args.queue
+    if getattr(args, "time_limit", None):
+        config["time_limit"] = args.time_limit
 
     try:
         result = run_project_batch(
@@ -927,6 +972,11 @@ def main() -> int:
     parser_qc.add_argument("--resume", action="store_true", help="Resume from the latest valid QC checkpoint")
     parser_qc.add_argument("--adapter", "-a", help="Adapter file for Trimmomatic")
     parser_qc.add_argument("--minlen", type=int, help="Minimum read length (default: 36)")
+    parser_qc.add_argument("--profile", help="Execution profile (default: local)")
+    parser_qc.add_argument("--threads", type=int, help="Requested threads for execution metadata")
+    parser_qc.add_argument("--memory", help="Requested memory for execution metadata")
+    parser_qc.add_argument("--queue", help="Requested queue/partition for execution metadata")
+    parser_qc.add_argument("--time-limit", dest="time_limit", help="Requested walltime for execution metadata")
 
     # batch 子命令
     parser_batch = subparsers.add_parser("batch", help="Batch format multiple sequence files")
@@ -949,6 +999,10 @@ def main() -> int:
     parser_align.add_argument("--outdir", help="Run output root directory (default: input_dir/align_run)")
     parser_align.add_argument("--resume", action="store_true", help="Resume from the latest valid alignment checkpoint")
     parser_align.add_argument("--threads", "-t", type=int, help="Number of threads (default: 1)")
+    parser_align.add_argument("--profile", help="Execution profile (default: local)")
+    parser_align.add_argument("--memory", help="Requested memory for execution metadata")
+    parser_align.add_argument("--queue", help="Requested queue/partition for execution metadata")
+    parser_align.add_argument("--time-limit", dest="time_limit", help="Requested walltime for execution metadata")
 
     # search 子命令
     parser_search = subparsers.add_parser("search", help="Run BLAST nucleotide search")
@@ -965,6 +1019,11 @@ def main() -> int:
         help="Maximum target sequences per query (default: 10)",
     )
     parser_search.add_argument("--top", type=int, help="Number of top hits to summarize (default: 5)")
+    parser_search.add_argument("--profile", help="Execution profile (default: local)")
+    parser_search.add_argument("--threads", type=int, help="Requested threads for execution metadata")
+    parser_search.add_argument("--memory", help="Requested memory for execution metadata")
+    parser_search.add_argument("--queue", help="Requested queue/partition for execution metadata")
+    parser_search.add_argument("--time-limit", dest="time_limit", help="Requested walltime for execution metadata")
 
     # report 子命令
     parser_report = subparsers.add_parser("report", help="Generate HTML run report")
@@ -977,6 +1036,11 @@ def main() -> int:
     parser_project.add_argument("--config", required=True, help="YAML project batch config file")
     parser_project.add_argument("--outdir", help="Project output root directory (default: config_dir/project_run)")
     parser_project.add_argument("--continue-on-error", "-c", action="store_true", help="Continue remaining samples when one sample fails")
+    parser_project.add_argument("--profile", help="Default execution profile for project samples")
+    parser_project.add_argument("--threads", type=int, help="Default threads for project samples")
+    parser_project.add_argument("--memory", help="Default memory for project samples")
+    parser_project.add_argument("--queue", help="Default queue/partition for project samples")
+    parser_project.add_argument("--time-limit", dest="time_limit", help="Default walltime for project samples")
 
     # inspect 子命令
     parser_inspect = subparsers.add_parser("inspect", help="Inspect run metadata and diagnostics")

@@ -380,6 +380,9 @@ def write_metadata(
         },
         "runtime": build_runtime_context(),
     }
+    execution = parameters.get("execution")
+    if isinstance(execution, dict):
+        payload["execution"] = execution
     if extra:
         payload.update(extra)
 

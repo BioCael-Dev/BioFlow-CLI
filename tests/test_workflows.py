@@ -28,7 +28,16 @@ def test_qc_pipeline_uses_standard_outdir(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(pipeline, "_run_fastqc", fake_fastqc)
     monkeypatch.setattr(pipeline, "_run_trimmomatic", fake_trimmomatic)
 
-    assert pipeline.run_qc_pipeline(reads, outdir=run_root, skip_preflight=True) is True
+    assert pipeline.run_qc_pipeline(
+        reads,
+        outdir=run_root,
+        execution={
+            "profile": "workstation",
+            "resources": {"threads": 4, "memory": "8G", "queue": "short", "time_limit": "02:00:00"},
+            "source": "test",
+        },
+        skip_preflight=True,
+    ) is True
     assert (run_root / "logs").is_dir()
     assert (run_root / "results" / "fastqc_pre").is_dir()
     assert (run_root / "results" / "fastqc_post").is_dir()
@@ -39,6 +48,8 @@ def test_qc_pipeline_uses_standard_outdir(tmp_path: Path, monkeypatch) -> None:
     assert metadata["outputs"]["trimmed"].endswith("reads.trimmed.fastq")
     assert metadata["input_details"]["input"]["sha256"]
     assert "python_version" in metadata["runtime"]
+    assert metadata["execution"]["profile"] == "workstation"
+    assert metadata["execution"]["resources"]["threads"] == 4
 
 
 def test_alignment_pipeline_writes_results_and_metadata(tmp_path: Path, monkeypatch) -> None:

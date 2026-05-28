@@ -308,6 +308,7 @@ def run_blast_search(
     max_target_seqs: int = 10,
     top_n: int = 5,
     resume: bool = False,
+    execution: dict[str, object] | None = None,
     cli_mode: bool = False,
     skip_preflight: bool = False,
 ) -> dict[str, object] | None:
@@ -345,7 +346,13 @@ def run_blast_search(
             layout,
             status=status,
             command="search",
-            parameters={"evalue": evalue, "max_target_seqs": max_target_seqs, "top_n": top_n, "resume": resume},
+            parameters={
+                "evalue": evalue,
+                "max_target_seqs": max_target_seqs,
+                "top_n": top_n,
+                "resume": resume,
+                "execution": execution or {"profile": "local", "resources": {}, "source": "default"},
+            },
             inputs={"db": str(db_fasta), "query": str(query_fasta)},
             outputs={"root": str(layout.root), "tsv": str(output), "summary": str(summary_path)},
             started_at=started_at,

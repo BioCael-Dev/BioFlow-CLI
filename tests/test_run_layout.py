@@ -19,7 +19,14 @@ def test_create_run_layout_and_metadata(tmp_path: Path) -> None:
         layout,
         status="success",
         command="qc",
-        parameters={"minlen": 36},
+        parameters={
+            "minlen": 36,
+            "execution": {
+                "profile": "workstation",
+                "resources": {"threads": 4, "memory": "8G", "queue": "short", "time_limit": "02:00:00"},
+                "source": "test",
+            },
+        },
         inputs={"input": str(anchor)},
         outputs={"root": str(layout.root)},
         started_at="2026-04-08T00:00:00+00:00",
@@ -33,3 +40,5 @@ def test_create_run_layout_and_metadata(tmp_path: Path) -> None:
     assert metadata["logs"]["stdout"].endswith("qc.stdout.log")
     assert metadata["runtime"]["bioflow_version"]
     assert metadata["input_details"]["input"]["path"] == str(anchor)
+    assert metadata["execution"]["profile"] == "workstation"
+    assert metadata["execution"]["resources"]["threads"] == 4

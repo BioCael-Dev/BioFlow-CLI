@@ -12,6 +12,7 @@ from rich.console import Console
 
 from bioflow import __version__
 from bioflow.alignment import run_alignment_pipeline
+from bioflow.config import merge_project_sample_defaults
 from bioflow.pipeline import run_qc_pipeline
 from bioflow.preflight import PreflightError
 from bioflow.report import generate_report
@@ -245,14 +246,15 @@ def run_project_batch(
     results: list[ProjectJobResult] = []
 
     for index, sample in enumerate(project_config["samples"], start=1):
-        run_dir = _job_run_dir(project_root, str(sample["sample_id"]), str(sample["workflow"]), index)
+        sample_config = merge_project_sample_defaults(project_config, sample)
+        run_dir = _job_run_dir(project_root, str(sample_config["sample_id"]), str(sample_config["workflow"]), index)
         if not quiet:
             console.print(
                 f"[bold cyan][Project {index}/{planned_sample_count}][/bold cyan] "
-                f"{sample['sample_id']} -> {sample['workflow']}"
+                f"{sample_config['sample_id']} -> {sample_config['workflow']}"
             )
 
-        result = _run_project_job(run_dir, sample)
+        result = _run_project_job(run_dir, sample_config)
         results.append(result)
         _write_project_summary(
             project_root,
