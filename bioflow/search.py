@@ -313,8 +313,24 @@ def run_blast_search(
     skip_preflight: bool = False,
 ) -> dict[str, object] | None:
     """执行 makeblastdb + blastn 基础检索流程。"""
+    execution_payload = execution or {"profile": "local", "backend": "system", "resources": {}, "source": "default"}
+
     if not skip_preflight:
-        if not preflight_check(SEARCH_REQUIRED_TOOLS, cli_mode=cli_mode):
+        if not preflight_check(
+            SEARCH_REQUIRED_TOOLS,
+            backend=str(execution_payload.get("backend", "system")),
+            conda_env=(
+                str(execution_payload["conda_env"])
+                if execution_payload.get("conda_env") is not None
+                else None
+            ),
+            container_image=(
+                str(execution_payload["container_image"])
+                if execution_payload.get("container_image") is not None
+                else None
+            ),
+            cli_mode=cli_mode,
+        ):
             return None
 
     layout = create_run_layout("search", query_fasta, outdir=outdir)
@@ -351,7 +367,7 @@ def run_blast_search(
                 "max_target_seqs": max_target_seqs,
                 "top_n": top_n,
                 "resume": resume,
-                "execution": execution or {"profile": "local", "resources": {}, "source": "default"},
+                "execution": execution_payload,
             },
             inputs={"db": str(db_fasta), "query": str(query_fasta)},
             outputs={"root": str(layout.root), "tsv": str(output), "summary": str(summary_path)},

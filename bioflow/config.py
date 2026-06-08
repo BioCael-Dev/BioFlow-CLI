@@ -11,38 +11,40 @@ import yaml
 WORKFLOW_ALLOWED_KEYS: dict[str, set[str]] = {
     "qc": {
         "input", "input_r1", "input_r2", "output", "outdir", "adapter", "minlen", "resume",
-        "profile", "threads", "memory", "queue", "time_limit",
+        "profile", "threads", "memory", "queue", "time_limit", "backend", "conda_env", "container_image",
     },
     "align": {
         "ref", "input", "input_r1", "input_r2", "output", "outdir", "threads", "resume",
-        "profile", "memory", "queue", "time_limit",
+        "profile", "memory", "queue", "time_limit", "backend", "conda_env", "container_image",
     },
     "search": {
         "db", "query", "output", "outdir", "evalue", "max_target_seqs", "top", "resume",
-        "profile", "threads", "memory", "queue", "time_limit",
+        "profile", "threads", "memory", "queue", "time_limit", "backend", "conda_env", "container_image",
     },
 }
 
 PROJECT_ALLOWED_KEYS: set[str] = {
     "outdir", "continue_on_error", "report_title", "profile", "threads", "memory",
-    "queue", "time_limit", "samples",
+    "queue", "time_limit", "backend", "conda_env", "container_image", "samples",
 }
 PROJECT_SAMPLE_ALLOWED_KEYS: dict[str, set[str]] = {
     "qc": {
         "sample_id", "workflow", "input", "input_r1", "input_r2", "adapter", "minlen", "resume",
-        "profile", "threads", "memory", "queue", "time_limit",
+        "profile", "threads", "memory", "queue", "time_limit", "backend", "conda_env", "container_image",
     },
     "align": {
         "sample_id", "workflow", "ref", "input", "input_r1", "input_r2", "output", "threads", "resume",
-        "profile", "memory", "queue", "time_limit",
+        "profile", "memory", "queue", "time_limit", "backend", "conda_env", "container_image",
     },
     "search": {
         "sample_id", "workflow", "db", "query", "output", "evalue", "max_target_seqs", "top", "resume",
-        "profile", "threads", "memory", "queue", "time_limit",
+        "profile", "threads", "memory", "queue", "time_limit", "backend", "conda_env", "container_image",
     },
 }
 
-EXECUTION_OPTION_KEYS: tuple[str, ...] = ("profile", "threads", "memory", "queue", "time_limit")
+EXECUTION_OPTION_KEYS: tuple[str, ...] = (
+    "profile", "threads", "memory", "queue", "time_limit", "backend", "conda_env", "container_image",
+)
 
 
 class ConfigError(Exception):
@@ -51,6 +53,11 @@ class ConfigError(Exception):
 
 def _validate_execution_options(data: dict[str, Any], *, context: str) -> None:
     """校验运行 profile 与资源参数。"""
+    backend = data.get("backend")
+    if backend is not None:
+        if not isinstance(backend, str) or backend not in {"system", "conda", "container"}:
+            raise ConfigError(f"{context} 'backend' must be one of: system, conda, container")
+
     profile = data.get("profile")
     if profile is not None and (not isinstance(profile, str) or not profile.strip()):
         raise ConfigError(f"{context} 'profile' must be a non-empty string")
@@ -67,12 +74,25 @@ def _validate_execution_options(data: dict[str, Any], *, context: str) -> None:
     if time_limit is not None and (not isinstance(time_limit, str) or not time_limit.strip()):
         raise ConfigError(f"{context} 'time_limit' must be a non-empty string")
 
+    conda_env = data.get("conda_env")
+    if conda_env is not None and (not isinstance(conda_env, str) or not conda_env.strip()):
+        raise ConfigError(f"{context} 'conda_env' must be a non-empty string")
+
+    container_image = data.get("container_image")
+    if container_image is not None and (not isinstance(container_image, str) or not container_image.strip()):
+        raise ConfigError(f"{context} 'container_image' must be a non-empty string")
+
     threads = data.get("threads")
     if threads is not None:
         if not isinstance(threads, int):
             raise ConfigError(f"{context} 'threads' must be an integer")
         if threads <= 0:
             raise ConfigError(f"{context} 'threads' must be positive")
+
+    if backend == "conda" and conda_env is None:
+        raise ConfigError(f"{context} backend 'conda' requires 'conda_env'")
+    if backend == "container" and container_image is None:
+        raise ConfigError(f"{context} backend 'container' requires 'container_image'")
 
 
 def merge_project_sample_defaults(
@@ -249,5 +269,8 @@ def load_project_config(config_path: Path) -> dict[str, Any]:
         "memory": data.get("memory"),
         "queue": data.get("queue"),
         "time_limit": data.get("time_limit"),
+        "backend": data.get("backend"),
+        "conda_env": data.get("conda_env"),
+        "container_image": data.get("container_image"),
         "samples": validated_samples,
     }

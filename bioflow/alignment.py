@@ -495,9 +495,30 @@ def run_alignment_pipeline(
     Returns:
         比对统计字典，失败时返回 None。
     """
+    execution_payload = execution or {
+        "profile": "local",
+        "backend": "system",
+        "resources": {"threads": threads},
+        "source": "default",
+    }
+
     # 1. Preflight 检查
     if not skip_preflight:
-        if not preflight_check(ALIGN_REQUIRED_TOOLS, cli_mode=cli_mode):
+        if not preflight_check(
+            ALIGN_REQUIRED_TOOLS,
+            backend=str(execution_payload.get("backend", "system")),
+            conda_env=(
+                str(execution_payload["conda_env"])
+                if execution_payload.get("conda_env") is not None
+                else None
+            ),
+            container_image=(
+                str(execution_payload["container_image"])
+                if execution_payload.get("container_image") is not None
+                else None
+            ),
+            cli_mode=cli_mode,
+        ):
             return None
 
     paired_mode, anchor = _validate_alignment_inputs(reads, input_r1, input_r2)
@@ -544,7 +565,7 @@ def run_alignment_pipeline(
                 "threads": threads,
                 "resume": resume,
                 "paired": paired_mode,
-                "execution": execution or {"profile": "local", "resources": {"threads": threads}, "source": "default"},
+                "execution": execution_payload,
             },
             inputs=(
                 {"ref": str(ref), "input_r1": str(input_r1), "input_r2": str(input_r2)}

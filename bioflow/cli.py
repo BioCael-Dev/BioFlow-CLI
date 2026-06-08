@@ -148,6 +148,9 @@ def _build_execution_context(params: dict[str, Any], *, source: str) -> dict[str
     """构造统一 execution 元数据。"""
     return {
         "profile": str(params.get("profile") or "local"),
+        "backend": str(params.get("backend") or "system"),
+        "conda_env": str(params["conda_env"]) if params.get("conda_env") is not None else None,
+        "container_image": str(params["container_image"]) if params.get("container_image") is not None else None,
         "resources": {
             "threads": int(params["threads"]) if params.get("threads") is not None else None,
             "memory": str(params["memory"]) if params.get("memory") is not None else None,
@@ -442,6 +445,7 @@ def cmd_qc(args: argparse.Namespace) -> int:
                 "input": None, "input_r1": None, "input_r2": None, "output": None, "outdir": None,
                 "adapter": None, "minlen": 36, "resume": False, "profile": "local",
                 "threads": None, "memory": None, "queue": None, "time_limit": None,
+                "backend": "system", "conda_env": None, "container_image": None,
             },
         )
     except ConfigError as exc:
@@ -527,7 +531,20 @@ def cmd_qc(args: argparse.Namespace) -> int:
             return EXIT_RUNTIME_ERROR
     except PreflightError as exc:
         if args.json:
-            print(json.dumps({"error": "dependency_missing", "tools": exc.missing_tools}, ensure_ascii=False))
+            print(
+                json.dumps(
+                    {
+                        "error": "dependency_missing",
+                        "tools": exc.missing_tools,
+                        "backend": exc.backend,
+                        "reason": exc.reason,
+                        "missing_runtime": exc.missing_runtime,
+                        "conda_env": exc.conda_env,
+                        "container_image": exc.container_image,
+                    },
+                    ensure_ascii=False,
+                )
+            )
         return EXIT_DEPENDENCY_MISSING
     except Exception as exc:
         if args.json:
@@ -548,6 +565,7 @@ def cmd_align(args: argparse.Namespace) -> int:
                 "ref": None, "input": None, "input_r1": None, "input_r2": None, "output": None,
                 "outdir": None, "threads": 1, "resume": False, "profile": "local",
                 "memory": None, "queue": None, "time_limit": None,
+                "backend": "system", "conda_env": None, "container_image": None,
             },
         )
     except ConfigError as exc:
@@ -654,7 +672,20 @@ def cmd_align(args: argparse.Namespace) -> int:
             return EXIT_RUNTIME_ERROR
     except PreflightError as exc:
         if args.json:
-            print(json.dumps({"error": "dependency_missing", "tools": exc.missing_tools}, ensure_ascii=False))
+            print(
+                json.dumps(
+                    {
+                        "error": "dependency_missing",
+                        "tools": exc.missing_tools,
+                        "backend": exc.backend,
+                        "reason": exc.reason,
+                        "missing_runtime": exc.missing_runtime,
+                        "conda_env": exc.conda_env,
+                        "container_image": exc.container_image,
+                    },
+                    ensure_ascii=False,
+                )
+            )
         return EXIT_DEPENDENCY_MISSING
     except Exception as exc:
         if args.json:
@@ -762,6 +793,9 @@ def cmd_search(args: argparse.Namespace) -> int:
                 "memory": None,
                 "queue": None,
                 "time_limit": None,
+                "backend": "system",
+                "conda_env": None,
+                "container_image": None,
             },
         )
     except ConfigError as exc:
@@ -859,7 +893,20 @@ def cmd_search(args: argparse.Namespace) -> int:
         return EXIT_SUCCESS
     except PreflightError as exc:
         if args.json:
-            print(json.dumps({"error": "dependency_missing", "tools": exc.missing_tools}, ensure_ascii=False))
+            print(
+                json.dumps(
+                    {
+                        "error": "dependency_missing",
+                        "tools": exc.missing_tools,
+                        "backend": exc.backend,
+                        "reason": exc.reason,
+                        "missing_runtime": exc.missing_runtime,
+                        "conda_env": exc.conda_env,
+                        "container_image": exc.container_image,
+                    },
+                    ensure_ascii=False,
+                )
+            )
         return EXIT_DEPENDENCY_MISSING
     except Exception as exc:
         if args.json:
@@ -901,6 +948,12 @@ def cmd_project(args: argparse.Namespace) -> int:
         config["queue"] = args.queue
     if getattr(args, "time_limit", None):
         config["time_limit"] = args.time_limit
+    if getattr(args, "backend", None):
+        config["backend"] = args.backend
+    if getattr(args, "conda_env", None):
+        config["conda_env"] = args.conda_env
+    if getattr(args, "container_image", None):
+        config["container_image"] = args.container_image
 
     try:
         result = run_project_batch(
@@ -977,6 +1030,9 @@ def main() -> int:
     parser_qc.add_argument("--memory", help="Requested memory for execution metadata")
     parser_qc.add_argument("--queue", help="Requested queue/partition for execution metadata")
     parser_qc.add_argument("--time-limit", dest="time_limit", help="Requested walltime for execution metadata")
+    parser_qc.add_argument("--backend", choices=["system", "conda", "container"], help="Execution backend (default: system)")
+    parser_qc.add_argument("--conda-env", dest="conda_env", help="Conda environment name for backend metadata")
+    parser_qc.add_argument("--container-image", dest="container_image", help="Container image name for backend metadata")
 
     # batch 子命令
     parser_batch = subparsers.add_parser("batch", help="Batch format multiple sequence files")
@@ -1003,6 +1059,9 @@ def main() -> int:
     parser_align.add_argument("--memory", help="Requested memory for execution metadata")
     parser_align.add_argument("--queue", help="Requested queue/partition for execution metadata")
     parser_align.add_argument("--time-limit", dest="time_limit", help="Requested walltime for execution metadata")
+    parser_align.add_argument("--backend", choices=["system", "conda", "container"], help="Execution backend (default: system)")
+    parser_align.add_argument("--conda-env", dest="conda_env", help="Conda environment name for backend metadata")
+    parser_align.add_argument("--container-image", dest="container_image", help="Container image name for backend metadata")
 
     # search 子命令
     parser_search = subparsers.add_parser("search", help="Run BLAST nucleotide search")
@@ -1024,6 +1083,9 @@ def main() -> int:
     parser_search.add_argument("--memory", help="Requested memory for execution metadata")
     parser_search.add_argument("--queue", help="Requested queue/partition for execution metadata")
     parser_search.add_argument("--time-limit", dest="time_limit", help="Requested walltime for execution metadata")
+    parser_search.add_argument("--backend", choices=["system", "conda", "container"], help="Execution backend (default: system)")
+    parser_search.add_argument("--conda-env", dest="conda_env", help="Conda environment name for backend metadata")
+    parser_search.add_argument("--container-image", dest="container_image", help="Container image name for backend metadata")
 
     # report 子命令
     parser_report = subparsers.add_parser("report", help="Generate HTML run report")
@@ -1041,6 +1103,9 @@ def main() -> int:
     parser_project.add_argument("--memory", help="Default memory for project samples")
     parser_project.add_argument("--queue", help="Default queue/partition for project samples")
     parser_project.add_argument("--time-limit", dest="time_limit", help="Default walltime for project samples")
+    parser_project.add_argument("--backend", choices=["system", "conda", "container"], help="Default execution backend for project samples")
+    parser_project.add_argument("--conda-env", dest="conda_env", help="Default conda environment name for project samples")
+    parser_project.add_argument("--container-image", dest="container_image", help="Default container image name for project samples")
 
     # inspect 子命令
     parser_inspect = subparsers.add_parser("inspect", help="Inspect run metadata and diagnostics")

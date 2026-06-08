@@ -153,7 +153,7 @@ def _run_project_job(run_dir: Path, sample: dict[str, Any]) -> ProjectJobResult:
             return _job_failure(sample_id, workflow, run_dir, f"unsupported workflow: {workflow}")
 
     except PreflightError as exc:
-        return _job_failure(sample_id, workflow, run_dir, f"missing tools: {', '.join(exc.missing_tools)}")
+        return _job_failure(sample_id, workflow, run_dir, str(exc))
     except Exception as exc:
         return _job_failure(sample_id, workflow, run_dir, str(exc))
 

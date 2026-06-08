@@ -148,8 +148,8 @@ bioflow qc --input-r1 reads_1.fastq --input-r2 reads_2.fastq --outdir runs/qc-pe
 # 从配置文件运行 QC 流程
 bioflow qc --config examples/qc.yml
 
-# 以执行 profile 和资源参数运行 QC（写入 metadata）
-bioflow qc --input reads.fastq --profile workstation --threads 4 --memory 8G --queue short --time-limit 02:00:00
+# 以 conda backend 元数据运行 QC（写入 metadata）
+bioflow qc --input reads.fastq --profile workstation --backend conda --conda-env bioflow-env --threads 4 --memory 8G --queue short --time-limit 02:00:00
 
 # 恢复中断的 QC 流程
 bioflow qc --input reads.fastq --outdir runs/qc-001 --resume
@@ -163,8 +163,8 @@ bioflow align --ref ref.fa --input-r1 reads_1.fastq --input-r2 reads_2.fastq --o
 # 从配置文件运行序列比对流程
 bioflow align --config examples/align.yml
 
-# 以执行 profile 和资源参数运行比对流程
-bioflow align --ref ref.fa --input reads.fastq --threads 4 --profile workstation --memory 16G --queue short --time-limit 04:00:00
+# 以 conda backend 元数据运行比对流程
+bioflow align --ref ref.fa --input reads.fastq --threads 4 --profile workstation --backend conda --conda-env bioflow-env --memory 16G --queue short --time-limit 04:00:00
 
 # 恢复中断的比对流程
 bioflow align --ref ref.fa --input reads.fastq --outdir runs/align-001 --resume
@@ -178,8 +178,8 @@ bioflow search --db ref.fa --query query.fa --output hits.tsv --top 3
 # 从配置文件运行 BLAST 检索
 bioflow search --config examples/search.yml
 
-# 以执行 profile 和资源参数运行 BLAST 检索
-bioflow search --db ref.fa --query query.fa --profile local --threads 2 --memory 4G
+# 以 container backend 元数据运行 BLAST 检索
+bioflow search --db ref.fa --query query.fa --profile local --backend container --container-image ghcr.io/biocael-dev/bioflow-cli:latest --threads 2 --memory 4G
 
 # 从单个 YAML 运行项目级批处理
 bioflow project --config examples/project.yml
@@ -188,7 +188,7 @@ bioflow project --config examples/project.yml
 bioflow project --config examples/project.yml --continue-on-error
 
 # 用 CLI 覆盖项目级默认执行参数
-bioflow project --config examples/project.yml --profile workstation --threads 8 --memory 32G --queue short --time-limit 08:00:00
+bioflow project --config examples/project.yml --profile workstation --backend conda --conda-env bioflow-env --threads 8 --memory 32G --queue short --time-limit 08:00:00
 
 # 恢复中断的 BLAST 检索
 bioflow search --db ref.fa --query query.fa --outdir runs/search-001 --resume
@@ -248,8 +248,8 @@ bioflow --json batch -i ./data -o ./formatted
 - 参数优先级为：CLI 显式参数 > YAML 配置 > 内置默认值
 - `qc` 与 `align` 支持二选一输入方式：`input` 或 `input_r1` + `input_r2`
 - `input` 不能与 `input_r1` / `input_r2` 混用
-- `qc`、`align`、`search` 配置还支持执行元数据字段：`profile`、`threads`、`memory`、`queue`、`time_limit`
-- `project` 配置可选顶层 `project:` 段，并支持 `outdir`、`continue_on_error`、`report_title`、`profile`、`threads`、`memory`、`queue`、`time_limit`、`samples`
+- `qc`、`align`、`search` 配置还支持执行元数据字段：`profile`、`threads`、`memory`、`queue`、`time_limit`、`backend`、`conda_env`、`container_image`
+- `project` 配置可选顶层 `project:` 段，并支持 `outdir`、`continue_on_error`、`report_title`、`profile`、`threads`、`memory`、`queue`、`time_limit`、`backend`、`conda_env`、`container_image`、`samples`
 - `samples` 中每个条目都必须包含 `sample_id`、`workflow` 以及对应 workflow 的必需字段
 - 项目级执行字段会默认继承到样本级，样本级显式配置可覆盖项目默认值
 - 示例模板已放在 `examples/`
@@ -262,7 +262,7 @@ bioflow --json batch -i ./data -o ./formatted
 - `bioflow project` 会在项目根目录下生成按样本划分的运行目录，例如 `001-sample-qc-qc`
 - 项目级运行还会额外生成 `project_summary.json` 和 `project_report.html`
 - `metadata.json` 现在额外记录输入文件大小 / 修改时间 / sha256、运行环境、工具版本和失败摘要
-- `metadata.json` 现在还会写入统一的 `execution` 区块，记录 `profile`、资源请求参数和参数来源
+- `metadata.json` 现在还会写入统一的 `execution` 区块，记录 `profile`、`backend`、`conda_env`、`container_image`、资源请求参数和参数来源
 - 双端 `qc` 会额外记录 `trimmed_r1`、`trimmed_r2`、`unpaired_r1`、`unpaired_r2`
 - 双端 `align` 会记录 `input_r1`、`input_r2`、`bam`、`bai` 以及成对比对统计
 - 若运行失败，诊断日志会保留在 `logs/` 目录中，便于排错
@@ -286,6 +286,7 @@ bioflow --json batch -i ./data -o ./formatted
 
 - 失败的 `qc`、`align`、`search` 现在会输出统一 CLI 诊断块
 - 诊断块包含失败步骤、失败命令、stdout/stderr 日志路径和 stderr 摘要
+- backend 感知的预检现在还能区分缺工具、缺 conda runtime、缺 conda 环境、缺 container runtime 或缺 container image
 - 同一份诊断信息也会写入 `metadata.json` 的 `failure_details`
 
 #### HTML 报告导出
@@ -322,7 +323,7 @@ pip install -e .[dev]
 
 ## 项目状态
 
-当前开发版本：**v0.8.0**
+当前开发版本：**v0.8.1**
 
 ## 许可证
 

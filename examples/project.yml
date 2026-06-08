@@ -7,6 +7,8 @@ project:
   memory: 8G
   queue: short
   time_limit: "02:00:00"
+  backend: conda
+  conda_env: bioflow-env
   samples:
     - sample_id: sample-qc
       workflow: qc
@@ -27,6 +29,8 @@ project:
       query: query.fa
       output: hits.tsv
       profile: local
+      backend: container
+      container_image: ghcr.io/biocael-dev/bioflow-cli:latest
       evalue: 1e-5
       max_target_seqs: 20
       top: 5

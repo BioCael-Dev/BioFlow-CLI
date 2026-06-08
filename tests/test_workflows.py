@@ -33,6 +33,9 @@ def test_qc_pipeline_uses_standard_outdir(tmp_path: Path, monkeypatch) -> None:
         outdir=run_root,
         execution={
             "profile": "workstation",
+            "backend": "conda",
+            "conda_env": "bioflow-env",
+            "container_image": None,
             "resources": {"threads": 4, "memory": "8G", "queue": "short", "time_limit": "02:00:00"},
             "source": "test",
         },
@@ -49,6 +52,8 @@ def test_qc_pipeline_uses_standard_outdir(tmp_path: Path, monkeypatch) -> None:
     assert metadata["input_details"]["input"]["sha256"]
     assert "python_version" in metadata["runtime"]
     assert metadata["execution"]["profile"] == "workstation"
+    assert metadata["execution"]["backend"] == "conda"
+    assert metadata["execution"]["conda_env"] == "bioflow-env"
     assert metadata["execution"]["resources"]["threads"] == 4
 
 
@@ -289,6 +294,44 @@ def test_cmd_qc_json_reports_outdir(tmp_path: Path, monkeypatch, capsys) -> None
     payload = json.loads(capsys.readouterr().out)
     assert payload["outdir"] == str(run_root)
     assert payload["metadata"] == str(run_root / "metadata.json")
+
+
+def test_cmd_qc_dependency_missing_reports_backend_details(tmp_path: Path, monkeypatch, capsys) -> None:
+    reads = tmp_path / "reads.fastq"
+    reads.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
+
+    def fake_qc(*args, **kwargs):
+        raise pipeline.PreflightError(
+            [],
+            backend="conda",
+            missing_runtime="conda",
+            conda_env="bioflow-env",
+            reason="missing_runtime",
+        )
+
+    monkeypatch.setattr(cli, "run_qc_pipeline", fake_qc)
+
+    exit_code = cli.cmd_qc(
+        Namespace(
+            quiet=False,
+            json=True,
+            config=None,
+            input=str(reads),
+            output=None,
+            outdir=None,
+            adapter=None,
+            minlen=36,
+            resume=False,
+        )
+    )
+
+    assert exit_code == cli.EXIT_DEPENDENCY_MISSING
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"] == "dependency_missing"
+    assert payload["backend"] == "conda"
+    assert payload["reason"] == "missing_runtime"
+    assert payload["missing_runtime"] == "conda"
+    assert payload["conda_env"] == "bioflow-env"
 
 
 def test_qc_resume_skips_completed_steps(tmp_path: Path, monkeypatch) -> None:

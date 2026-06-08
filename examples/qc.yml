@@ -4,3 +4,8 @@ qc:
   outdir: runs/qc-001
   adapter: adapters.fa
   minlen: 36
+  profile: workstation
+  backend: conda
+  conda_env: bioflow-env
+  threads: 4
+  memory: 8G

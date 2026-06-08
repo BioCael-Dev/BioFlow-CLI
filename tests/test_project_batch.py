@@ -19,6 +19,8 @@ def test_load_project_config_accepts_wrapped_project_section(tmp_path: Path) -> 
                 "  profile: workstation",
                 "  threads: 8",
                 "  memory: 16G",
+                "  backend: conda",
+                "  conda_env: bioflow-env",
                 "  samples:",
                 "    - sample_id: sample-qc",
                 "      workflow: qc",
@@ -40,6 +42,8 @@ def test_load_project_config_accepts_wrapped_project_section(tmp_path: Path) -> 
     assert config["profile"] == "workstation"
     assert config["threads"] == 8
     assert config["memory"] == "16G"
+    assert config["backend"] == "conda"
+    assert config["conda_env"] == "bioflow-env"
     assert len(config["samples"]) == 2
 
 
@@ -115,6 +119,31 @@ def test_load_project_config_rejects_missing_align_ref(tmp_path: Path) -> None:
         raise AssertionError("expected ConfigError")
 
 
+def test_load_project_config_rejects_container_backend_without_image(tmp_path: Path) -> None:
+    config_path = tmp_path / "project.yml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "project:",
+                "  backend: container",
+                "  samples:",
+                "    - sample_id: sample-search",
+                "      workflow: search",
+                "      db: ref.fa",
+                "      query: query.fa",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        load_project_config(config_path)
+    except ConfigError as exc:
+        assert "requires 'container_image'" in str(exc)
+    else:
+        raise AssertionError("expected ConfigError")
+
+
 def test_run_project_batch_writes_summary_and_report(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / "runs" / "project-001"
     config_path = tmp_path / "project.yml"
@@ -128,6 +157,9 @@ def test_run_project_batch_writes_summary_and_report(tmp_path: Path, monkeypatch
         "memory": "8G",
         "queue": "short",
         "time_limit": "02:00:00",
+        "backend": "conda",
+        "conda_env": "bioflow-env",
+        "container_image": None,
         "samples": [
             {"sample_id": "sample-qc", "workflow": "qc", "input": "reads.fastq"},
             {"sample_id": "sample-search", "workflow": "search", "db": "ref.fa", "query": "query.fa"},
@@ -206,6 +238,9 @@ def test_run_project_batch_continue_on_error_keeps_running(tmp_path: Path, monke
         "memory": "4G",
         "queue": None,
         "time_limit": None,
+        "backend": "system",
+        "conda_env": None,
+        "container_image": None,
         "samples": [
             {"sample_id": "sample-qc", "workflow": "qc", "input": "reads.fastq"},
             {"sample_id": "sample-align", "workflow": "align", "ref": "ref.fa", "input": "reads.fastq"},
@@ -277,6 +312,9 @@ def test_merge_project_sample_defaults_inherits_execution_values() -> None:
         "memory": "16G",
         "queue": "short",
         "time_limit": "04:00:00",
+        "backend": "container",
+        "conda_env": None,
+        "container_image": "ghcr.io/demo/bioflow:latest",
     }
     sample = {"sample_id": "sample-qc", "workflow": "qc", "input": "reads.fastq"}
 
@@ -287,6 +325,8 @@ def test_merge_project_sample_defaults_inherits_execution_values() -> None:
     assert merged["memory"] == "16G"
     assert merged["queue"] == "short"
     assert merged["time_limit"] == "04:00:00"
+    assert merged["backend"] == "container"
+    assert merged["container_image"] == "ghcr.io/demo/bioflow:latest"
 
 
 def test_cmd_project_json_outputs_payload(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -334,6 +374,9 @@ def test_cmd_project_json_outputs_payload(tmp_path: Path, monkeypatch, capsys) -
             memory=None,
             queue=None,
             time_limit=None,
+            backend=None,
+            conda_env=None,
+            container_image=None,
         )
     )
 
@@ -387,6 +430,9 @@ def test_cmd_project_returns_runtime_error_when_failure_stops_batch(tmp_path: Pa
             memory=None,
             queue=None,
             time_limit=None,
+            backend=None,
+            conda_env=None,
+            container_image=None,
         )
     )
 
@@ -444,6 +490,9 @@ def test_cmd_project_overrides_execution_defaults_from_cli(tmp_path: Path, monke
             memory="16G",
             queue="short",
             time_limit="04:00:00",
+            backend="conda",
+            conda_env="bioflow-env",
+            container_image=None,
         )
     )
 
@@ -454,3 +503,5 @@ def test_cmd_project_overrides_execution_defaults_from_cli(tmp_path: Path, monke
     assert captured["memory"] == "16G"
     assert captured["queue"] == "short"
     assert captured["time_limit"] == "04:00:00"
+    assert captured["backend"] == "conda"
+    assert captured["conda_env"] == "bioflow-env"

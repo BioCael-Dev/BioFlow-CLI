@@ -105,8 +105,8 @@ bioflow qc --input-r1 reads_1.fastq --input-r2 reads_2.fastq --outdir runs/qc-pe
 # Run QC pipeline from config
 bioflow qc --config examples/qc.yml
 
-# Run QC with execution profile metadata
-bioflow qc --input reads.fastq --profile workstation --threads 4 --memory 8G --queue short --time-limit 02:00:00
+# Run QC with conda backend metadata
+bioflow qc --input reads.fastq --profile workstation --backend conda --conda-env bioflow-env --threads 4 --memory 8G --queue short --time-limit 02:00:00
 
 # Resume an interrupted QC run
 bioflow qc --input reads.fastq --outdir runs/qc-001 --resume
@@ -120,8 +120,8 @@ bioflow align --ref ref.fa --input-r1 reads_1.fastq --input-r2 reads_2.fastq --o
 # Run alignment pipeline from config
 bioflow align --config examples/align.yml
 
-# Run alignment with execution profile metadata
-bioflow align --ref ref.fa --input reads.fastq --threads 4 --profile workstation --memory 16G --queue short --time-limit 04:00:00
+# Run alignment with conda backend metadata
+bioflow align --ref ref.fa --input reads.fastq --threads 4 --profile workstation --backend conda --conda-env bioflow-env --memory 16G --queue short --time-limit 04:00:00
 
 # Resume an interrupted alignment run
 bioflow align --ref ref.fa --input reads.fastq --outdir runs/align-001 --resume
@@ -135,8 +135,8 @@ bioflow search --db ref.fa --query query.fa --output hits.tsv --top 3
 # Run BLAST search from config
 bioflow search --config examples/search.yml
 
-# Run BLAST search with execution profile metadata
-bioflow search --db ref.fa --query query.fa --profile local --threads 2 --memory 4G
+# Run BLAST search with container backend metadata
+bioflow search --db ref.fa --query query.fa --profile local --backend container --container-image ghcr.io/biocael-dev/bioflow-cli:latest --threads 2 --memory 4G
 
 # Run a mixed project batch from one YAML config
 bioflow project --config examples/project.yml
@@ -145,7 +145,7 @@ bioflow project --config examples/project.yml
 bioflow project --config examples/project.yml --continue-on-error
 
 # Override project-level execution defaults from CLI
-bioflow project --config examples/project.yml --profile workstation --threads 8 --memory 32G --queue short --time-limit 08:00:00
+bioflow project --config examples/project.yml --profile workstation --backend conda --conda-env bioflow-env --threads 8 --memory 32G --queue short --time-limit 08:00:00
 
 # Resume an interrupted BLAST search
 bioflow search --db ref.fa --query query.fa --outdir runs/search-001 --resume
@@ -208,8 +208,8 @@ bioflow --json batch -i ./data -o ./formatted
 - `qc` and `align` support either `input` or the `input_r1` + `input_r2` pair
 - `input` cannot be combined with `input_r1` / `input_r2`
 - `project` config uses a top-level `project:` section optionally, and supports `outdir`, `continue_on_error`, `report_title`, and `samples`
-- `qc`, `align`, and `search` configs also support execution metadata fields: `profile`, `threads`, `memory`, `queue`, and `time_limit`
-- `project` config uses a top-level `project:` section optionally, and supports `outdir`, `continue_on_error`, `report_title`, `profile`, `threads`, `memory`, `queue`, `time_limit`, and `samples`
+- `qc`, `align`, and `search` configs also support execution metadata fields: `profile`, `threads`, `memory`, `queue`, `time_limit`, `backend`, `conda_env`, and `container_image`
+- `project` config uses a top-level `project:` section optionally, and supports `outdir`, `continue_on_error`, `report_title`, `profile`, `threads`, `memory`, `queue`, `time_limit`, `backend`, `conda_env`, `container_image`, and `samples`
 - each `samples` item requires `sample_id`, `workflow`, and that workflow's normal required fields
 - project-level execution fields are inherited by samples unless a sample overrides them
 - example templates are available in `examples/`
@@ -222,7 +222,7 @@ bioflow --json batch -i ./data -o ./formatted
 - `bioflow project` creates one project root with per-sample run directories such as `001-sample-qc-qc`
 - each project run also writes `project_summary.json` and `project_report.html`
 - metadata now records input file size / mtime / sha256, runtime environment, tool versions, and failure summary
-- metadata now also writes an `execution` block with `profile`, requested resources, and parameter source
+- metadata now also writes an `execution` block with `profile`, `backend`, `conda_env`, `container_image`, requested resources, and parameter source
 - paired-end `qc` metadata also records `trimmed_r1`, `trimmed_r2`, `unpaired_r1`, and `unpaired_r2`
 - paired-end `align` metadata records `input_r1`, `input_r2`, `bam`, `bai`, and paired flagstat metrics
 - on failure, diagnostic stdout/stderr logs are retained under `logs/`
@@ -246,6 +246,7 @@ bioflow --json batch -i ./data -o ./formatted
 
 - failed `qc`, `align`, and `search` runs now print a unified CLI diagnostic block
 - the block includes failed step, failed command, stdout log path, stderr log path, and stderr tail
+- backend-aware preflight now distinguishes missing tools from missing conda runtime, missing conda env, or missing container runtime/image
 - the same diagnostics are persisted in `metadata.json` under `failure_details`
 
 ### HTML Reports
@@ -282,7 +283,7 @@ pip install -e .[dev]
 
 ## Project Status
 
-Current development version: **v0.8.0**
+Current development version: **v0.8.1**
 
 Release history and notes: [GitHub Releases](https://github.com/BioCael-Dev/BioFlow-CLI/releases)
 

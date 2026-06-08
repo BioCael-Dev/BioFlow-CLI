@@ -4,4 +4,8 @@ align:
   input_r2: reads_2.fastq
   outdir: runs/align-001
   output: aligned.sorted.bam
+  profile: workstation
+  backend: conda
+  conda_env: bioflow-env
   threads: 4
+  memory: 16G

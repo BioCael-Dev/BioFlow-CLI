@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+from typing import Any
 
 import questionary
 from rich.console import Console
@@ -39,6 +40,44 @@ def _check_installed(executable: str) -> bool:
 def _check_conda() -> bool:
     """检查 conda 是否可用。"""
     return shutil.which("conda") is not None
+
+
+def _check_conda_env(env_name: str) -> bool:
+    """检查指定 conda 环境是否存在。"""
+    if not env_name or not _check_conda():
+        return False
+    try:
+        result = subprocess.run(
+            ["conda", "env", "list", "--json"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+    try:
+        import json
+
+        payload: dict[str, Any] = json.loads(result.stdout)
+    except Exception:
+        return False
+
+    envs = payload.get("envs", [])
+    if not isinstance(envs, list):
+        return False
+
+    for entry in envs:
+        if not isinstance(entry, str):
+            continue
+        if entry.rstrip("/").endswith(f"/{env_name}") or entry.rstrip("\\").endswith(f"\\{env_name}"):
+            return True
+    return False
+
+
+def _check_container_runtime(runtime: str) -> bool:
+    """检查容器运行时是否可用。"""
+    return shutil.which(runtime) is not None
 
 
 def _run_install(name: str, cmd: list[str]) -> bool:

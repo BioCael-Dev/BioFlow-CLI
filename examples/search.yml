@@ -3,6 +3,11 @@ search:
   query: query.fa
   outdir: runs/search-001
   output: hits.tsv
+  profile: workstation
+  backend: container
+  container_image: ghcr.io/biocael-dev/bioflow-cli:latest
+  threads: 2
+  memory: 4G
   evalue: 1e-5
   max_target_seqs: 20
   top: 5

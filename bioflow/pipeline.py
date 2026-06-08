@@ -225,9 +225,25 @@ def run_qc_pipeline(
     Returns:
         True 表示全部步骤成功。
     """
+    execution_payload = execution or {"profile": "local", "backend": "system", "resources": {}, "source": "default"}
+
     # 1. Preflight 检查
     if not skip_preflight:
-        if not preflight_check(QC_REQUIRED_TOOLS, cli_mode=cli_mode):
+        if not preflight_check(
+            QC_REQUIRED_TOOLS,
+            backend=str(execution_payload.get("backend", "system")),
+            conda_env=(
+                str(execution_payload["conda_env"])
+                if execution_payload.get("conda_env") is not None
+                else None
+            ),
+            container_image=(
+                str(execution_payload["container_image"])
+                if execution_payload.get("container_image") is not None
+                else None
+            ),
+            cli_mode=cli_mode,
+        ):
             return False
 
     paired_mode, anchor = _validate_qc_inputs(input_file, input_r1, input_r2)
@@ -269,7 +285,7 @@ def run_qc_pipeline(
                 "minlen": minlen,
                 "resume": resume,
                 "paired": paired_mode,
-                "execution": execution or {"profile": "local", "resources": {}, "source": "default"},
+                "execution": execution_payload,
             },
             inputs=(
                 {"input_r1": str(input_r1), "input_r2": str(input_r2)}
