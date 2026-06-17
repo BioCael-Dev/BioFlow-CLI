@@ -9,3 +9,5 @@ qc:
   conda_env: bioflow-env
   threads: 4
   memory: 8G
+  queue: short
+  time_limit: "02:00:00"

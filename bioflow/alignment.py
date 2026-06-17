@@ -14,6 +14,13 @@ from rich.progress import BarColumn, Progress, TextColumn
 from rich.table import Table
 
 from bioflow.i18n import t
+from bioflow.execution import (
+    ResolvedCommand,
+    resolve_command,
+    resolve_pipeline_commands,
+    stringify_command,
+    summarize_commands,
+)
 from bioflow.preflight import preflight_check
 from bioflow.run_layout import (
     STEP_FAILED,
@@ -55,7 +62,7 @@ def _print_alignment_failure(description: str, err: str) -> bool:
 
 
 def _run_cmd(
-    cmd: list[str],
+    command: ResolvedCommand,
     *,
     description: str = "",
     capture: bool = False,
@@ -67,7 +74,7 @@ def _run_cmd(
         console.print(f"  → {description}", style="cyan")
     try:
         result = subprocess.run(
-            cmd,
+            list(command.resolved_command),
             check=True,
             capture_output=capture,
             text=True,
@@ -87,10 +94,22 @@ def _run_cmd(
         return None
 
 
-def _run_bwa_index(ref: Path, *, stdout_log: Path | None = None, stderr_log: Path | None = None) -> bool:
+def _run_bwa_index(
+    ref: Path,
+    *,
+    execution: dict[str, object] | None = None,
+    stdout_log: Path | None = None,
+    stderr_log: Path | None = None,
+) -> bool:
     """构建 BWA 索引。"""
-    result = _run_cmd(
+    command = resolve_command(
         ["bwa", "index", str(ref)],
+        execution,
+        path_hints=(ref,),
+        workdir=ref.parent,
+    )
+    result = _run_cmd(
+        command,
         description=t("align_indexing", file=ref.name),
         stdout_log=stdout_log,
         stderr_log=stderr_log,
@@ -104,6 +123,7 @@ def _run_bwa_mem_pipe_sort(
     output_bam: Path,
     *,
     threads: int = 1,
+    execution: dict[str, object] | None = None,
     stdout_log: Path | None = None,
     stderr_log: Path | None = None,
 ) -> bool:
@@ -111,9 +131,20 @@ def _run_bwa_mem_pipe_sort(
     description = t("align_mapping")
     console.print(f"  → {description}", style="cyan")
 
-    bwa_cmd = ["bwa", "mem", "-t", str(threads), str(ref), str(reads)]
-    view_cmd = ["samtools", "view", "-bS", "-@", str(threads), "-"]
-    sort_cmd = ["samtools", "sort", "-@", str(threads), "-o", str(output_bam), "-"]
+    raw_commands = [
+        ["bwa", "mem", "-t", str(threads), str(ref), str(reads)],
+        ["samtools", "view", "-bS", "-@", str(threads), "-"],
+        ["samtools", "sort", "-@", str(threads), "-o", str(output_bam), "-"],
+    ]
+    resolved_pipeline = resolve_pipeline_commands(
+        raw_commands,
+        execution,
+        path_hints=(ref, reads, output_bam),
+        workdir=output_bam.parent,
+    )
+    bwa_cmd = list(resolved_pipeline[0].resolved_command)
+    view_cmd = list(resolved_pipeline[1].resolved_command)
+    sort_cmd = list(resolved_pipeline[2].resolved_command)
 
     bwa_proc: subprocess.Popen[str] | None = None
     view_proc: subprocess.Popen[bytes] | None = None
@@ -186,6 +217,7 @@ def _run_bwa_mem_pipe_sort_pe(
     output_bam: Path,
     *,
     threads: int = 1,
+    execution: dict[str, object] | None = None,
     stdout_log: Path | None = None,
     stderr_log: Path | None = None,
 ) -> bool:
@@ -193,9 +225,20 @@ def _run_bwa_mem_pipe_sort_pe(
     description = t("align_mapping")
     console.print(f"  → {description}", style="cyan")
 
-    bwa_cmd = ["bwa", "mem", "-t", str(threads), str(ref), str(reads_r1), str(reads_r2)]
-    view_cmd = ["samtools", "view", "-bS", "-@", str(threads), "-"]
-    sort_cmd = ["samtools", "sort", "-@", str(threads), "-o", str(output_bam), "-"]
+    raw_commands = [
+        ["bwa", "mem", "-t", str(threads), str(ref), str(reads_r1), str(reads_r2)],
+        ["samtools", "view", "-bS", "-@", str(threads), "-"],
+        ["samtools", "sort", "-@", str(threads), "-o", str(output_bam), "-"],
+    ]
+    resolved_pipeline = resolve_pipeline_commands(
+        raw_commands,
+        execution,
+        path_hints=(ref, reads_r1, reads_r2, output_bam),
+        workdir=output_bam.parent,
+    )
+    bwa_cmd = list(resolved_pipeline[0].resolved_command)
+    view_cmd = list(resolved_pipeline[1].resolved_command)
+    sort_cmd = list(resolved_pipeline[2].resolved_command)
 
     bwa_proc: subprocess.Popen[str] | None = None
     view_proc: subprocess.Popen[bytes] | None = None
@@ -325,12 +368,19 @@ def _format_step_label(step: str, name_key: str) -> str:
 def _run_samtools_index(
     bam: Path,
     *,
+    execution: dict[str, object] | None = None,
     stdout_log: Path | None = None,
     stderr_log: Path | None = None,
 ) -> bool:
     """为 BAM 文件创建索引 (.bai)。"""
-    result = _run_cmd(
+    command = resolve_command(
         ["samtools", "index", str(bam)],
+        execution,
+        path_hints=(bam,),
+        workdir=bam.parent,
+    )
+    result = _run_cmd(
+        command,
         description=t("align_sorting"),
         stdout_log=stdout_log,
         stderr_log=stderr_log,
@@ -341,6 +391,7 @@ def _run_samtools_index(
 def _run_samtools_flagstat(
     bam: Path,
     *,
+    execution: dict[str, object] | None = None,
     stdout_log: Path | None = None,
     stderr_log: Path | None = None,
 ) -> str | None:
@@ -349,7 +400,14 @@ def _run_samtools_flagstat(
     console.print(f"  → {description}", style="cyan")
     try:
         result = subprocess.run(
-            ["samtools", "flagstat", str(bam)],
+            list(
+                resolve_command(
+                    ["samtools", "flagstat", str(bam)],
+                    execution,
+                    path_hints=(bam,),
+                    workdir=bam.parent,
+                ).resolved_command
+            ),
             check=True, capture_output=True, text=True,
         )
         append_log(stdout_log, result.stdout)
@@ -590,6 +648,7 @@ def run_alignment_pipeline(
         ALIGN_STEP_INDEX,
         validator=lambda: all(f.exists() for f in bwa_index_files),
         required_outputs=("index_files",),
+        current_execution=execution_payload,
     ):
         set_step_state(steps, ALIGN_STEP_INDEX, STEP_SKIPPED, outputs={"index_files": [str(f) for f in bwa_index_files]}, note="reused existing output")
         persist("running")
@@ -599,21 +658,44 @@ def run_alignment_pipeline(
         persist("running")
         console.print(_format_step_label("1/4", "align_step_index_cached"), style="bold blue")
     else:
+        index_command = resolve_command(
+            ["bwa", "index", str(ref)],
+            execution_payload,
+            path_hints=(ref,),
+            workdir=ref.parent,
+        )
         console.print(_format_step_label("1/4", "align_step_index"), style="bold blue")
-        set_step_state(steps, ALIGN_STEP_INDEX, STEP_RUNNING)
+        set_step_state(
+            steps,
+            ALIGN_STEP_INDEX,
+            STEP_RUNNING,
+            backend=index_command.backend,
+            raw_command=stringify_command(index_command.raw_command),
+            resolved_command=stringify_command(index_command.resolved_command),
+            environment_fingerprint=index_command.environment_fingerprint,
+        )
         persist("running")
-        if not _run_bwa_index(ref, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log):
+        if not _run_bwa_index(ref, execution=execution_payload, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log):
             failure_summary = build_failure_summary(ALIGN_STEP_INDEX, stderr_log=layout.stderr_log, fallback="BWA index failed")
             failure_details = build_failure_details(
                 step_name=ALIGN_STEP_INDEX,
-                command=f"bwa index {ref}",
+                command=stringify_command(index_command.resolved_command),
                 layout=layout,
                 error=failure_summary,
             )
             set_step_state(steps, ALIGN_STEP_INDEX, STEP_FAILED, outputs={"index_files": [str(f) for f in bwa_index_files]}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return None
-        set_step_state(steps, ALIGN_STEP_INDEX, STEP_SUCCESS, outputs={"index_files": [str(f) for f in bwa_index_files]})
+        set_step_state(
+            steps,
+            ALIGN_STEP_INDEX,
+            STEP_SUCCESS,
+            outputs={"index_files": [str(f) for f in bwa_index_files]},
+            backend=index_command.backend,
+            raw_command=stringify_command(index_command.raw_command),
+            resolved_command=stringify_command(index_command.resolved_command),
+            environment_fingerprint=index_command.environment_fingerprint,
+        )
         persist("running")
 
     console.print(_format_step_label("2/4", "align_step_map_sort"), style="bold blue")
@@ -622,11 +704,39 @@ def run_alignment_pipeline(
         ALIGN_STEP_MAP,
         validator=lambda: _is_nonempty_file(output),
         required_outputs=("bam",),
+        current_execution=execution_payload,
     ):
         set_step_state(steps, ALIGN_STEP_MAP, STEP_SKIPPED, outputs={"bam": str(output)}, note="reused existing output")
         persist("running")
     else:
-        set_step_state(steps, ALIGN_STEP_MAP, STEP_RUNNING)
+        map_commands = resolve_pipeline_commands(
+            (
+                [
+                    ["bwa", "mem", "-t", str(threads), str(ref), str(input_r1), str(input_r2)],
+                    ["samtools", "view", "-bS", "-@", str(threads), "-"],
+                    ["samtools", "sort", "-@", str(threads), "-o", str(output), "-"],
+                ]
+                if paired_mode
+                else [
+                    ["bwa", "mem", "-t", str(threads), str(ref), str(reads)],
+                    ["samtools", "view", "-bS", "-@", str(threads), "-"],
+                    ["samtools", "sort", "-@", str(threads), "-o", str(output), "-"],
+                ]
+            ),
+            execution_payload,
+            path_hints=(ref, input_r1, input_r2, reads, output),
+            workdir=output.parent,
+        )
+        raw_command, resolved_command = summarize_commands(map_commands, separator=" | ")
+        set_step_state(
+            steps,
+            ALIGN_STEP_MAP,
+            STEP_RUNNING,
+            backend=map_commands[0].backend,
+            raw_command=raw_command,
+            resolved_command=resolved_command,
+            environment_fingerprint=map_commands[0].environment_fingerprint,
+        )
         persist("running")
         if paired_mode:
             assert input_r1 is not None and input_r2 is not None
@@ -636,13 +746,14 @@ def run_alignment_pipeline(
                 input_r2,
                 output,
                 threads=threads,
+                execution=execution_payload,
                 stdout_log=layout.stdout_log,
                 stderr_log=layout.stderr_log,
             ):
                 failure_summary = build_failure_summary(ALIGN_STEP_MAP, stderr_log=layout.stderr_log, fallback="Alignment failed")
                 failure_details = build_failure_details(
                     step_name=ALIGN_STEP_MAP,
-                    command=f"bwa mem -t {threads} {ref} {input_r1} {input_r2} | samtools view -bS -@ {threads} - | samtools sort -@ {threads} -o {output} -",
+                    command=resolved_command,
                     layout=layout,
                     error=failure_summary,
                 )
@@ -656,20 +767,30 @@ def run_alignment_pipeline(
                 reads,
                 output,
                 threads=threads,
+                execution=execution_payload,
                 stdout_log=layout.stdout_log,
                 stderr_log=layout.stderr_log,
             ):
                 failure_summary = build_failure_summary(ALIGN_STEP_MAP, stderr_log=layout.stderr_log, fallback="Alignment failed")
                 failure_details = build_failure_details(
                     step_name=ALIGN_STEP_MAP,
-                    command=f"bwa mem -t {threads} {ref} {reads} | samtools view -bS -@ {threads} - | samtools sort -@ {threads} -o {output} -",
+                    command=resolved_command,
                     layout=layout,
                     error=failure_summary,
                 )
                 set_step_state(steps, ALIGN_STEP_MAP, STEP_FAILED, outputs={"bam": str(output)}, error=failure_summary)
                 persist("failed", completed_at=utc_now_iso())
                 return None
-        set_step_state(steps, ALIGN_STEP_MAP, STEP_SUCCESS, outputs={"bam": str(output)})
+        set_step_state(
+            steps,
+            ALIGN_STEP_MAP,
+            STEP_SUCCESS,
+            outputs={"bam": str(output)},
+            backend=map_commands[0].backend,
+            raw_command=raw_command,
+            resolved_command=resolved_command,
+            environment_fingerprint=map_commands[0].environment_fingerprint,
+        )
         persist("running")
 
     console.print(_format_step_label("3/4", "align_step_bam_index"), style="bold blue")
@@ -678,24 +799,48 @@ def run_alignment_pipeline(
         ALIGN_STEP_BAM_INDEX,
         validator=lambda: _is_nonempty_file(bai_path),
         required_outputs=("bai",),
+        current_execution=execution_payload,
     ):
         set_step_state(steps, ALIGN_STEP_BAM_INDEX, STEP_SKIPPED, outputs={"bai": str(bai_path)}, note="reused existing output")
         persist("running")
     else:
-        set_step_state(steps, ALIGN_STEP_BAM_INDEX, STEP_RUNNING)
+        bam_index_command = resolve_command(
+            ["samtools", "index", str(output)],
+            execution_payload,
+            path_hints=(output,),
+            workdir=output.parent,
+        )
+        set_step_state(
+            steps,
+            ALIGN_STEP_BAM_INDEX,
+            STEP_RUNNING,
+            backend=bam_index_command.backend,
+            raw_command=stringify_command(bam_index_command.raw_command),
+            resolved_command=stringify_command(bam_index_command.resolved_command),
+            environment_fingerprint=bam_index_command.environment_fingerprint,
+        )
         persist("running")
-        if not _run_samtools_index(output, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log):
+        if not _run_samtools_index(output, execution=execution_payload, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log):
             failure_summary = build_failure_summary(ALIGN_STEP_BAM_INDEX, stderr_log=layout.stderr_log, fallback="BAM indexing failed")
             failure_details = build_failure_details(
                 step_name=ALIGN_STEP_BAM_INDEX,
-                command=f"samtools index {output}",
+                command=stringify_command(bam_index_command.resolved_command),
                 layout=layout,
                 error=failure_summary,
             )
             set_step_state(steps, ALIGN_STEP_BAM_INDEX, STEP_FAILED, outputs={"bai": str(bai_path)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return None
-        set_step_state(steps, ALIGN_STEP_BAM_INDEX, STEP_SUCCESS, outputs={"bai": str(bai_path)})
+        set_step_state(
+            steps,
+            ALIGN_STEP_BAM_INDEX,
+            STEP_SUCCESS,
+            outputs={"bai": str(bai_path)},
+            backend=bam_index_command.backend,
+            raw_command=stringify_command(bam_index_command.raw_command),
+            resolved_command=stringify_command(bam_index_command.resolved_command),
+            environment_fingerprint=bam_index_command.environment_fingerprint,
+        )
         persist("running")
 
     console.print(_format_step_label("4/4", "align_step_flagstat"), style="bold blue")
@@ -704,19 +849,34 @@ def run_alignment_pipeline(
         ALIGN_STEP_FLAGSTAT,
         validator=lambda: _flagstat_ready(flagstat_path),
         required_outputs=("flagstat",),
+        current_execution=execution_payload,
     ):
         flagstat_text = flagstat_path.read_text(encoding="utf-8")
         set_step_state(steps, ALIGN_STEP_FLAGSTAT, STEP_SKIPPED, outputs={"flagstat": str(flagstat_path)}, note="reused existing output")
         persist("running")
     else:
-        set_step_state(steps, ALIGN_STEP_FLAGSTAT, STEP_RUNNING)
+        flagstat_command = resolve_command(
+            ["samtools", "flagstat", str(output)],
+            execution_payload,
+            path_hints=(output, flagstat_path),
+            workdir=output.parent,
+        )
+        set_step_state(
+            steps,
+            ALIGN_STEP_FLAGSTAT,
+            STEP_RUNNING,
+            backend=flagstat_command.backend,
+            raw_command=stringify_command(flagstat_command.raw_command),
+            resolved_command=stringify_command(flagstat_command.resolved_command),
+            environment_fingerprint=flagstat_command.environment_fingerprint,
+        )
         persist("running")
-        flagstat_text = _run_samtools_flagstat(output, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
+        flagstat_text = _run_samtools_flagstat(output, execution=execution_payload, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
         if flagstat_text is None:
             failure_summary = build_failure_summary(ALIGN_STEP_FLAGSTAT, stderr_log=layout.stderr_log, fallback="flagstat failed")
             failure_details = build_failure_details(
                 step_name=ALIGN_STEP_FLAGSTAT,
-                command=f"samtools flagstat {output}",
+                command=stringify_command(flagstat_command.resolved_command),
                 layout=layout,
                 error=failure_summary,
             )
@@ -724,7 +884,16 @@ def run_alignment_pipeline(
             persist("failed", completed_at=utc_now_iso())
             return None
         flagstat_path.write_text(flagstat_text, encoding="utf-8")
-        set_step_state(steps, ALIGN_STEP_FLAGSTAT, STEP_SUCCESS, outputs={"flagstat": str(flagstat_path)})
+        set_step_state(
+            steps,
+            ALIGN_STEP_FLAGSTAT,
+            STEP_SUCCESS,
+            outputs={"flagstat": str(flagstat_path)},
+            backend=flagstat_command.backend,
+            raw_command=stringify_command(flagstat_command.raw_command),
+            resolved_command=stringify_command(flagstat_command.resolved_command),
+            environment_fingerprint=flagstat_command.environment_fingerprint,
+        )
         persist("running")
 
     stats = parse_flagstat(flagstat_text)

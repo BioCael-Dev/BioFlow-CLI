@@ -55,6 +55,10 @@ def test_qc_pipeline_uses_standard_outdir(tmp_path: Path, monkeypatch) -> None:
     assert metadata["execution"]["backend"] == "conda"
     assert metadata["execution"]["conda_env"] == "bioflow-env"
     assert metadata["execution"]["resources"]["threads"] == 4
+    assert metadata["steps"]["fastqc_pre"]["backend"] == "conda"
+    assert "conda run" in metadata["steps"]["fastqc_pre"]["resolved_command"]
+    assert metadata["steps"]["fastqc_pre"]["environment_fingerprint"]
+    assert metadata["steps"]["trimmomatic"]["resolved_command"]
 
 
 def test_alignment_pipeline_writes_results_and_metadata(tmp_path: Path, monkeypatch) -> None:
@@ -226,6 +230,8 @@ def test_search_pipeline_generates_summary_and_metadata(tmp_path: Path, monkeypa
     assert metadata["status"] == "success"
     assert metadata["summary"]["hit_count"] == 1
     assert metadata["input_details"]["query"]["size_bytes"] > 0
+    assert metadata["steps"]["blastn"]["resolved_command"]
+    assert metadata["steps"]["blastn"]["environment_fingerprint"]
 
 
 def test_search_run_cmd_retains_failure_logs(tmp_path: Path, monkeypatch) -> None:
@@ -365,6 +371,82 @@ def test_qc_resume_skips_completed_steps(tmp_path: Path, monkeypatch) -> None:
     assert metadata["steps"]["fastqc_pre"]["status"] == "skipped"
     assert metadata["steps"]["trimmomatic"]["status"] == "skipped"
     assert metadata["steps"]["fastqc_post"]["status"] == "skipped"
+
+
+def test_qc_resume_recomputes_when_execution_changes(tmp_path: Path, monkeypatch) -> None:
+    reads = tmp_path / "reads.fastq"
+    reads.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
+    run_root = tmp_path / "runs" / "qc-execution-change"
+    pre_dir = run_root / "results" / "fastqc_pre"
+    pre_dir.mkdir(parents=True, exist_ok=True)
+    (pre_dir / "reads_fastqc.html").write_text("ok", encoding="utf-8")
+    trimmed = run_root / "results" / "reads.trimmed.fastq"
+    trimmed.parent.mkdir(parents=True, exist_ok=True)
+    trimmed.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
+    post_dir = run_root / "results" / "fastqc_post"
+    post_dir.mkdir(parents=True, exist_ok=True)
+    (post_dir / "reads.trimmed_fastqc.html").write_text("ok", encoding="utf-8")
+    (run_root / "metadata.json").write_text(
+        json.dumps(
+            {
+                "execution": {
+                    "profile": "local",
+                    "backend": "system",
+                    "conda_env": None,
+                    "container_image": None,
+                    "resources": {"threads": 1, "memory": None, "queue": None, "time_limit": None},
+                },
+                "steps": {
+                    "fastqc_pre": {
+                        "status": "success",
+                        "outputs": {"dir": str(pre_dir)},
+                    },
+                    "trimmomatic": {
+                        "status": "success",
+                        "outputs": {"trimmed": str(trimmed)},
+                    },
+                    "fastqc_post": {
+                        "status": "success",
+                        "outputs": {"dir": str(post_dir)},
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    calls = {"fastqc": 0, "trim": 0}
+
+    def fake_fastqc(input_file: Path, output_dir: Path, **_: object) -> bool:
+        calls["fastqc"] += 1
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / f"{input_file.stem}_fastqc.html").write_text("ok", encoding="utf-8")
+        return True
+
+    def fake_trimmomatic(input_file: Path, output_file: Path, **_: object) -> bool:
+        calls["trim"] += 1
+        output_file.write_text(input_file.read_text(encoding="utf-8"), encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(pipeline, "_run_fastqc", fake_fastqc)
+    monkeypatch.setattr(pipeline, "_run_trimmomatic", fake_trimmomatic)
+
+    assert pipeline.run_qc_pipeline(
+        reads,
+        outdir=run_root,
+        resume=True,
+        execution={
+            "profile": "workstation",
+            "backend": "conda",
+            "conda_env": "bioflow-env",
+            "container_image": None,
+            "resources": {"threads": 4, "memory": "8G", "queue": "short", "time_limit": "02:00:00"},
+            "source": "test",
+        },
+        skip_preflight=True,
+    ) is True
+    assert calls["trim"] == 1
+    assert calls["fastqc"] == 2
 
 
 def test_qc_resume_recomputes_invalid_trimmed_output(tmp_path: Path, monkeypatch) -> None:

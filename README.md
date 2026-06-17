@@ -105,7 +105,7 @@ bioflow qc --input-r1 reads_1.fastq --input-r2 reads_2.fastq --outdir runs/qc-pe
 # Run QC pipeline from config
 bioflow qc --config examples/qc.yml
 
-# Run QC with conda backend metadata
+# Run QC with the conda execution backend
 bioflow qc --input reads.fastq --profile workstation --backend conda --conda-env bioflow-env --threads 4 --memory 8G --queue short --time-limit 02:00:00
 
 # Resume an interrupted QC run
@@ -120,7 +120,7 @@ bioflow align --ref ref.fa --input-r1 reads_1.fastq --input-r2 reads_2.fastq --o
 # Run alignment pipeline from config
 bioflow align --config examples/align.yml
 
-# Run alignment with conda backend metadata
+# Run alignment with the conda execution backend
 bioflow align --ref ref.fa --input reads.fastq --threads 4 --profile workstation --backend conda --conda-env bioflow-env --memory 16G --queue short --time-limit 04:00:00
 
 # Resume an interrupted alignment run
@@ -135,7 +135,7 @@ bioflow search --db ref.fa --query query.fa --output hits.tsv --top 3
 # Run BLAST search from config
 bioflow search --config examples/search.yml
 
-# Run BLAST search with container backend metadata
+# Run BLAST search with the container execution backend
 bioflow search --db ref.fa --query query.fa --profile local --backend container --container-image ghcr.io/biocael-dev/bioflow-cli:latest --threads 2 --memory 4G
 
 # Run a mixed project batch from one YAML config
@@ -212,6 +212,7 @@ bioflow --json batch -i ./data -o ./formatted
 - `project` config uses a top-level `project:` section optionally, and supports `outdir`, `continue_on_error`, `report_title`, `profile`, `threads`, `memory`, `queue`, `time_limit`, `backend`, `conda_env`, `container_image`, and `samples`
 - each `samples` item requires `sample_id`, `workflow`, and that workflow's normal required fields
 - project-level execution fields are inherited by samples unless a sample overrides them
+- project samples now execute through the same backend wrapper as direct workflow runs
 - example templates are available in `examples/`
 
 ### Workflow Output Layout
@@ -223,6 +224,7 @@ bioflow --json batch -i ./data -o ./formatted
 - each project run also writes `project_summary.json` and `project_report.html`
 - metadata now records input file size / mtime / sha256, runtime environment, tool versions, and failure summary
 - metadata now also writes an `execution` block with `profile`, `backend`, `conda_env`, `container_image`, requested resources, and parameter source
+- each workflow step now records its backend, raw command, resolved command, and environment fingerprint
 - paired-end `qc` metadata also records `trimmed_r1`, `trimmed_r2`, `unpaired_r1`, and `unpaired_r2`
 - paired-end `align` metadata records `input_r1`, `input_r2`, `bam`, `bai`, and paired flagstat metrics
 - on failure, diagnostic stdout/stderr logs are retained under `logs/`
@@ -232,8 +234,16 @@ bioflow --json batch -i ./data -o ./formatted
 - `bioflow qc --resume`, `bioflow align --resume`, and `bioflow search --resume` resume from the latest valid workflow checkpoint
 - completed steps are reused automatically when their key outputs remain valid
 - resume validation also checks metadata step status and required output descriptors before reusing a checkpoint
+- resume also compares the execution fingerprint; changing profile, backend, environment, or requested resources forces recomputation
 - incomplete or corrupted intermediate outputs are detected and recomputed
 - TUI mode now prompts when an existing run directory contains resumable metadata
+
+### Execution Backends
+
+- `system` runs tools directly on the host
+- `conda` wraps tool calls with `conda run -n <env>`
+- `container` wraps tool calls with `docker run` or `apptainer exec`
+- `metadata.json` stores both the raw tool command and the resolved backend-specific command
 
 ### Run Inspection
 
@@ -283,7 +293,7 @@ pip install -e .[dev]
 
 ## Project Status
 
-Current development version: **v0.8.1**
+Current development version: **v0.8.2**
 
 Release history and notes: [GitHub Releases](https://github.com/BioCael-Dev/BioFlow-CLI/releases)
 

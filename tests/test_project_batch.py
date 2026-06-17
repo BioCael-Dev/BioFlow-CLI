@@ -226,6 +226,53 @@ def test_run_project_batch_writes_summary_and_report(tmp_path: Path, monkeypatch
     assert [sample["workflow"] for sample in summary["samples"]] == ["qc", "search"]
 
 
+def test_run_project_batch_passes_execution_to_workflows(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "project.yml"
+    project_root = tmp_path / "runs" / "project-execution"
+    project_config = {
+        "outdir": str(project_root),
+        "continue_on_error": False,
+        "report_title": None,
+        "profile": "workstation",
+        "threads": 8,
+        "memory": "16G",
+        "queue": "short",
+        "time_limit": "04:00:00",
+        "backend": "conda",
+        "conda_env": "bioflow-env",
+        "container_image": None,
+        "samples": [
+            {"sample_id": "sample-qc", "workflow": "qc", "input": "reads.fastq"},
+        ],
+    }
+    seen_execution: dict[str, object] = {}
+
+    def fake_qc(_input: Path | None, **kwargs: object) -> bool:
+        seen_execution.update(kwargs["execution"])
+        outdir = kwargs["outdir"]
+        outdir.mkdir(parents=True, exist_ok=True)
+        (outdir / "metadata.json").write_text(
+            json.dumps({"workflow": "qc", "status": "success", "outputs": {}}),
+            encoding="utf-8",
+        )
+        return True
+
+    monkeypatch.setattr(project_batch, "run_qc_pipeline", fake_qc)
+    monkeypatch.setattr(project_batch, "generate_report", lambda input_path, output_path, title=None: output_path)
+
+    result = project_batch.run_project_batch(
+        config_path=config_path,
+        project_config=project_config,
+        quiet=True,
+    )
+
+    assert result["status"] == "success"
+    assert seen_execution["backend"] == "conda"
+    assert seen_execution["conda_env"] == "bioflow-env"
+    assert seen_execution["resources"]["threads"] == 8
+    assert seen_execution["source"] == "project_config"
+
+
 def test_run_project_batch_continue_on_error_keeps_running(tmp_path: Path, monkeypatch) -> None:
     config_path = tmp_path / "project.yml"
     project_root = tmp_path / "runs" / "project-continue"

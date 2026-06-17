@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from bioflow.i18n import t
+from bioflow.execution import ResolvedCommand, resolve_command, summarize_commands
 from bioflow.preflight import PreflightError, preflight_check
 from bioflow.run_layout import (
     STEP_FAILED,
@@ -42,7 +43,7 @@ QC_STEP_FASTQC_POST = "fastqc_post"
 
 
 def _run_cmd(
-    cmd: list[str],
+    command: ResolvedCommand,
     *,
     description: str = "",
     stdout_log: Path | None = None,
@@ -52,7 +53,7 @@ def _run_cmd(
     if description:
         console.print(f"  → {description}", style="cyan")
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        result = subprocess.run(list(command.resolved_command), check=True, capture_output=True, text=True)
         append_log(stdout_log, result.stdout)
         append_log(stderr_log, result.stderr)
         return True
@@ -77,13 +78,20 @@ def _run_fastqc(
     input_file: Path,
     output_dir: Path,
     *,
+    execution: dict[str, object] | None = None,
     stdout_log: Path | None = None,
     stderr_log: Path | None = None,
 ) -> bool:
     """运行 FastQC 质量检测。"""
     output_dir.mkdir(parents=True, exist_ok=True)
-    return _run_cmd(
+    command = resolve_command(
         ["fastqc", str(input_file), "-o", str(output_dir), "--quiet"],
+        execution,
+        path_hints=(input_file, output_dir),
+        workdir=output_dir,
+    )
+    return _run_cmd(
+        command,
         description=t("qc_running_fastqc", file=input_file.name),
         stdout_log=stdout_log,
         stderr_log=stderr_log,
@@ -96,6 +104,7 @@ def _run_trimmomatic(
     *,
     adapter: str | None = None,
     minlen: int = 36,
+    execution: dict[str, object] | None = None,
     stdout_log: Path | None = None,
     stderr_log: Path | None = None,
 ) -> bool:
@@ -116,8 +125,14 @@ def _run_trimmomatic(
     cmd.append("SLIDINGWINDOW:4:15")
     cmd.append(f"MINLEN:{minlen}")
 
-    return _run_cmd(
+    command = resolve_command(
         cmd,
+        execution,
+        path_hints=(input_file, output_file, adapter) if adapter else (input_file, output_file),
+        workdir=output_file.parent,
+    )
+    return _run_cmd(
+        command,
         description=t("qc_running_trimmomatic", file=input_file.name),
         stdout_log=stdout_log,
         stderr_log=stderr_log,
@@ -134,6 +149,7 @@ def _run_trimmomatic_pe(
     *,
     adapter: str | None = None,
     minlen: int = 36,
+    execution: dict[str, object] | None = None,
     stdout_log: Path | None = None,
     stderr_log: Path | None = None,
 ) -> bool:
@@ -155,8 +171,29 @@ def _run_trimmomatic_pe(
     cmd.append("TRAILING:3")
     cmd.append("SLIDINGWINDOW:4:15")
     cmd.append(f"MINLEN:{minlen}")
-    return _run_cmd(
+    command = resolve_command(
         cmd,
+        execution,
+        path_hints=(
+            input_r1,
+            input_r2,
+            output_r1_paired,
+            output_r1_unpaired,
+            output_r2_paired,
+            output_r2_unpaired,
+            adapter,
+        ) if adapter else (
+            input_r1,
+            input_r2,
+            output_r1_paired,
+            output_r1_unpaired,
+            output_r2_paired,
+            output_r2_unpaired,
+        ),
+        workdir=output_r1_paired.parent,
+    )
+    return _run_cmd(
+        command,
         description=t("qc_running_trimmomatic", file=f"{input_r1.name} / {input_r2.name}"),
         stdout_log=stdout_log,
         stderr_log=stderr_log,
@@ -339,34 +376,59 @@ def run_qc_pipeline(
             else (lambda: _fastqc_report_exists(input_file, fastqc_pre_dir))
         ),
         required_outputs=("dir",),
+        current_execution=execution_payload,
     ):
         set_step_state(steps, QC_STEP_FASTQC_PRE, STEP_SKIPPED, outputs={"dir": str(fastqc_pre_dir)}, note="reused existing output")
         persist("running")
     else:
+        pre_fastqc_commands = [
+            resolve_command(
+                ["fastqc", str(candidate), "-o", str(fastqc_pre_dir), "--quiet"],
+                execution_payload,
+                path_hints=(candidate, fastqc_pre_dir),
+                workdir=fastqc_pre_dir,
+            )
+            for candidate in ((input_r1, input_r2) if paired_mode else (input_file,))
+        ]
+        raw_command, resolved_command = summarize_commands(pre_fastqc_commands, separator=" && ")
         set_step_state(steps, QC_STEP_FASTQC_PRE, STEP_RUNNING)
+        set_step_state(
+            steps,
+            QC_STEP_FASTQC_PRE,
+            STEP_RUNNING,
+            backend=pre_fastqc_commands[0].backend,
+            raw_command=raw_command,
+            resolved_command=resolved_command,
+            environment_fingerprint=pre_fastqc_commands[0].environment_fingerprint,
+        )
         persist("running")
         fastqc_ok = (
-            _run_fastqc(input_r1, fastqc_pre_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
-            and _run_fastqc(input_r2, fastqc_pre_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
+            _run_fastqc(input_r1, fastqc_pre_dir, execution=execution_payload, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
+            and _run_fastqc(input_r2, fastqc_pre_dir, execution=execution_payload, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
             if paired_mode
-            else _run_fastqc(input_file, fastqc_pre_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
+            else _run_fastqc(input_file, fastqc_pre_dir, execution=execution_payload, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
         )
         if not fastqc_ok:
             failure_summary = build_failure_summary(QC_STEP_FASTQC_PRE, stderr_log=layout.stderr_log, fallback="FastQC failed")
             failure_details = build_failure_details(
                 step_name=QC_STEP_FASTQC_PRE,
-                command=(
-                    f"fastqc {input_r1} {input_r2} -o {fastqc_pre_dir} --quiet"
-                    if paired_mode
-                    else f"fastqc {input_file} -o {fastqc_pre_dir} --quiet"
-                ),
+                command=resolved_command,
                 layout=layout,
                 error=failure_summary,
             )
             set_step_state(steps, QC_STEP_FASTQC_PRE, STEP_FAILED, outputs={"dir": str(fastqc_pre_dir)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return False
-        set_step_state(steps, QC_STEP_FASTQC_PRE, STEP_SUCCESS, outputs={"dir": str(fastqc_pre_dir)})
+        set_step_state(
+            steps,
+            QC_STEP_FASTQC_PRE,
+            STEP_SUCCESS,
+            outputs={"dir": str(fastqc_pre_dir)},
+            backend=pre_fastqc_commands[0].backend,
+            raw_command=raw_command,
+            resolved_command=resolved_command,
+            environment_fingerprint=pre_fastqc_commands[0].environment_fingerprint,
+        )
         persist("running")
 
     # 4. 步骤 2：Trimmomatic 修剪
@@ -389,6 +451,7 @@ def run_qc_pipeline(
             else (lambda: _is_nonempty_file(trimmed_file))
         ),
         required_outputs=("trimmed_r1", "trimmed_r2", "unpaired_r1", "unpaired_r2") if paired_mode else ("trimmed",),
+        current_execution=execution_payload,
     ):
         set_step_state(
             steps,
@@ -408,7 +471,65 @@ def run_qc_pipeline(
         )
         persist("running")
     else:
-        set_step_state(steps, QC_STEP_TRIM, STEP_RUNNING)
+        trim_command = resolve_command(
+            (
+                [
+                    "trimmomatic",
+                    "PE",
+                    "-phred33",
+                    str(input_r1),
+                    str(input_r2),
+                    str(trimmed_r1),
+                    str(unpaired_r1),
+                    str(trimmed_r2),
+                    str(unpaired_r2),
+                ]
+                if paired_mode
+                else [
+                    "trimmomatic",
+                    "SE",
+                    "-phred33",
+                    str(input_file),
+                    str(trimmed_file),
+                ]
+            )
+            + ([f"ILLUMINACLIP:{adapter}:2:30:10"] if adapter else [])
+            + ["LEADING:3", "TRAILING:3", "SLIDINGWINDOW:4:15", f"MINLEN:{minlen}"],
+            execution_payload,
+            path_hints=(
+                input_r1,
+                input_r2,
+                trimmed_r1,
+                unpaired_r1,
+                trimmed_r2,
+                unpaired_r2,
+                adapter,
+            ) if paired_mode and adapter else (
+                input_r1,
+                input_r2,
+                trimmed_r1,
+                unpaired_r1,
+                trimmed_r2,
+                unpaired_r2,
+            ) if paired_mode else (
+                input_file,
+                trimmed_file,
+                adapter,
+            ) if adapter else (
+                input_file,
+                trimmed_file,
+            ),
+            workdir=layout.results_dir,
+        )
+        set_step_state(
+            steps,
+            QC_STEP_TRIM,
+            STEP_RUNNING,
+            backend=trim_command.backend,
+            raw_command=" ".join(trim_command.raw_command),
+            resolved_command=" ".join(trim_command.resolved_command),
+            environment_fingerprint=trim_command.environment_fingerprint,
+        )
         persist("running")
         trim_ok = (
             _run_trimmomatic_pe(
@@ -420,6 +541,7 @@ def run_qc_pipeline(
                 unpaired_r2,
                 adapter=adapter,
                 minlen=minlen,
+                execution=execution_payload,
                 stdout_log=layout.stdout_log,
                 stderr_log=layout.stderr_log,
             )
@@ -429,6 +551,7 @@ def run_qc_pipeline(
                 trimmed_file,
                 adapter=adapter,
                 minlen=minlen,
+                execution=execution_payload,
                 stdout_log=layout.stdout_log,
                 stderr_log=layout.stderr_log,
             )
@@ -457,7 +580,7 @@ def run_qc_pipeline(
             trim_parts.extend(["LEADING:3", "TRAILING:3", "SLIDINGWINDOW:4:15", f"MINLEN:{minlen}"])
             failure_details = build_failure_details(
                 step_name=QC_STEP_TRIM,
-                command=" ".join(trim_parts),
+                command=" ".join(trim_command.resolved_command),
                 layout=layout,
                 error=failure_summary,
             )
@@ -493,6 +616,10 @@ def run_qc_pipeline(
                 if paired_mode
                 else {"trimmed": str(trimmed_file)}
             ),
+            backend=trim_command.backend,
+            raw_command=" ".join(trim_command.raw_command),
+            resolved_command=" ".join(trim_command.resolved_command),
+            environment_fingerprint=trim_command.environment_fingerprint,
         )
         persist("running")
 
@@ -507,34 +634,58 @@ def run_qc_pipeline(
             else (lambda: _fastqc_report_exists(trimmed_file, fastqc_post_dir))
         ),
         required_outputs=("dir",),
+        current_execution=execution_payload,
     ):
         set_step_state(steps, QC_STEP_FASTQC_POST, STEP_SKIPPED, outputs={"dir": str(fastqc_post_dir)}, note="reused existing output")
         persist("running")
     else:
-        set_step_state(steps, QC_STEP_FASTQC_POST, STEP_RUNNING)
+        post_fastqc_commands = [
+            resolve_command(
+                ["fastqc", str(candidate), "-o", str(fastqc_post_dir), "--quiet"],
+                execution_payload,
+                path_hints=(candidate, fastqc_post_dir),
+                workdir=fastqc_post_dir,
+            )
+            for candidate in ((trimmed_r1, trimmed_r2) if paired_mode else (trimmed_file,))
+        ]
+        raw_command, resolved_command = summarize_commands(post_fastqc_commands, separator=" && ")
+        set_step_state(
+            steps,
+            QC_STEP_FASTQC_POST,
+            STEP_RUNNING,
+            backend=post_fastqc_commands[0].backend,
+            raw_command=raw_command,
+            resolved_command=resolved_command,
+            environment_fingerprint=post_fastqc_commands[0].environment_fingerprint,
+        )
         persist("running")
         fastqc_post_ok = (
-            _run_fastqc(trimmed_r1, fastqc_post_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
-            and _run_fastqc(trimmed_r2, fastqc_post_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
+            _run_fastqc(trimmed_r1, fastqc_post_dir, execution=execution_payload, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
+            and _run_fastqc(trimmed_r2, fastqc_post_dir, execution=execution_payload, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
             if paired_mode
-            else _run_fastqc(trimmed_file, fastqc_post_dir, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
+            else _run_fastqc(trimmed_file, fastqc_post_dir, execution=execution_payload, stdout_log=layout.stdout_log, stderr_log=layout.stderr_log)
         )
         if not fastqc_post_ok:
             failure_summary = build_failure_summary(QC_STEP_FASTQC_POST, stderr_log=layout.stderr_log, fallback="FastQC failed")
             failure_details = build_failure_details(
                 step_name=QC_STEP_FASTQC_POST,
-                command=(
-                    f"fastqc {trimmed_r1} {trimmed_r2} -o {fastqc_post_dir} --quiet"
-                    if paired_mode
-                    else f"fastqc {trimmed_file} -o {fastqc_post_dir} --quiet"
-                ),
+                command=resolved_command,
                 layout=layout,
                 error=failure_summary,
             )
             set_step_state(steps, QC_STEP_FASTQC_POST, STEP_FAILED, outputs={"dir": str(fastqc_post_dir)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return False
-        set_step_state(steps, QC_STEP_FASTQC_POST, STEP_SUCCESS, outputs={"dir": str(fastqc_post_dir)})
+        set_step_state(
+            steps,
+            QC_STEP_FASTQC_POST,
+            STEP_SUCCESS,
+            outputs={"dir": str(fastqc_post_dir)},
+            backend=post_fastqc_commands[0].backend,
+            raw_command=raw_command,
+            resolved_command=resolved_command,
+            environment_fingerprint=post_fastqc_commands[0].environment_fingerprint,
+        )
 
     failure_summary = ""
     failure_details = {}

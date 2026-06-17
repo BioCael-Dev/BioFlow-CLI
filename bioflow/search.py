@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from bioflow.execution import ResolvedCommand, resolve_command, stringify_command
 from bioflow.i18n import t
 from bioflow.preflight import preflight_check
 from bioflow.run_layout import (
@@ -82,7 +83,7 @@ def _print_search_failure(description: str, err: str) -> bool:
 
 
 def _run_cmd(
-    cmd: list[str],
+    command: ResolvedCommand | list[str],
     *,
     description: str = "",
     quiet: bool = False,
@@ -90,10 +91,11 @@ def _run_cmd(
     stderr_log: Path | None = None,
 ) -> bool:
     """执行外部命令并返回是否成功。"""
+    resolved = command if isinstance(command, ResolvedCommand) else ResolvedCommand(tuple(command), tuple(command), "system", "")
     if description and not quiet:
         console.print(f"  → {description}", style="cyan")
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        result = subprocess.run(list(resolved.resolved_command), check=True, capture_output=True, text=True)
         append_log(stdout_log, result.stdout)
         append_log(stderr_log, result.stderr)
         return True
@@ -120,12 +122,13 @@ def _blast_db_ready(db_fasta: Path) -> bool:
 def _run_makeblastdb(
     db_fasta: Path,
     *,
+    execution: dict[str, object] | None = None,
     quiet: bool = False,
     stdout_log: Path | None = None,
     stderr_log: Path | None = None,
 ) -> bool:
     """构建 BLAST nucleotide 数据库。"""
-    return _run_cmd(
+    command = resolve_command(
         [
             "makeblastdb",
             "-in",
@@ -133,6 +136,12 @@ def _run_makeblastdb(
             "-dbtype",
             "nucl",
         ],
+        execution,
+        path_hints=(db_fasta,),
+        workdir=db_fasta.parent,
+    )
+    return _run_cmd(
+        command,
         description=t("search_building_db", file=db_fasta.name),
         quiet=quiet,
         stdout_log=stdout_log,
@@ -147,12 +156,13 @@ def _run_blastn(
     *,
     evalue: float = 10.0,
     max_target_seqs: int = 10,
+    execution: dict[str, object] | None = None,
     quiet: bool = False,
     stdout_log: Path | None = None,
     stderr_log: Path | None = None,
 ) -> bool:
     """执行 blastn 检索。"""
-    return _run_cmd(
+    command = resolve_command(
         [
             "blastn",
             "-query",
@@ -168,6 +178,12 @@ def _run_blastn(
             "-max_target_seqs",
             str(max_target_seqs),
         ],
+        execution,
+        path_hints=(db_fasta, query_fasta, output_path),
+        workdir=output_path.parent,
+    )
+    return _run_cmd(
+        command,
         description=t("search_running_blastn", file=query_fasta.name),
         quiet=quiet,
         stdout_log=stdout_log,
@@ -392,6 +408,7 @@ def run_blast_search(
         SEARCH_STEP_DB,
         validator=lambda: _blast_db_ready(db_fasta),
         required_outputs=("db",),
+        current_execution=execution_payload,
     ):
         set_step_state(steps, SEARCH_STEP_DB, STEP_SKIPPED, outputs={"db": str(db_fasta)}, note="reused existing output")
         persist("running")
@@ -403,12 +420,27 @@ def run_blast_search(
         if not quiet:
             console.print(t("search_db_cached"), style="bold blue")
     else:
+        db_command = resolve_command(
+            ["makeblastdb", "-in", str(db_fasta), "-dbtype", "nucl"],
+            execution_payload,
+            path_hints=(db_fasta,),
+            workdir=db_fasta.parent,
+        )
         if not quiet:
             console.print(t("search_step_makeblastdb"), style="bold blue")
-        set_step_state(steps, SEARCH_STEP_DB, STEP_RUNNING)
+        set_step_state(
+            steps,
+            SEARCH_STEP_DB,
+            STEP_RUNNING,
+            backend=db_command.backend,
+            raw_command=stringify_command(db_command.raw_command),
+            resolved_command=stringify_command(db_command.resolved_command),
+            environment_fingerprint=db_command.environment_fingerprint,
+        )
         persist("running")
         if not _run_makeblastdb(
             db_fasta,
+            execution=execution_payload,
             quiet=quiet,
             stdout_log=layout.stdout_log,
             stderr_log=layout.stderr_log,
@@ -416,14 +448,23 @@ def run_blast_search(
             failure_summary = build_failure_summary(SEARCH_STEP_DB, stderr_log=layout.stderr_log, fallback="makeblastdb failed")
             failure_details = build_failure_details(
                 step_name=SEARCH_STEP_DB,
-                command=f"makeblastdb -in {db_fasta} -dbtype nucl",
+                command=stringify_command(db_command.resolved_command),
                 layout=layout,
                 error=failure_summary,
             )
             set_step_state(steps, SEARCH_STEP_DB, STEP_FAILED, outputs={"db": str(db_fasta)}, error=failure_summary)
             persist("failed", completed_at=utc_now_iso())
             return None
-        set_step_state(steps, SEARCH_STEP_DB, STEP_SUCCESS, outputs={"db": str(db_fasta)})
+        set_step_state(
+            steps,
+            SEARCH_STEP_DB,
+            STEP_SUCCESS,
+            outputs={"db": str(db_fasta)},
+            backend=db_command.backend,
+            raw_command=stringify_command(db_command.raw_command),
+            resolved_command=stringify_command(db_command.resolved_command),
+            environment_fingerprint=db_command.environment_fingerprint,
+        )
         persist("running")
 
     if not quiet:
@@ -433,6 +474,7 @@ def run_blast_search(
         SEARCH_STEP_BLASTN,
         validator=lambda: _is_nonempty_file(output),
         required_outputs=("tsv",),
+        current_execution=execution_payload,
     ):
         try:
             hits = parse_blast_tsv(output)
@@ -468,7 +510,36 @@ def run_blast_search(
             set_step_state(steps, SEARCH_STEP_BLASTN, STEP_SUCCESS, outputs={"tsv": str(output)})
             persist("running")
     else:
+        blastn_command = resolve_command(
+            [
+                "blastn",
+                "-query",
+                str(query_fasta),
+                "-db",
+                str(db_fasta),
+                "-out",
+                str(output),
+                "-outfmt",
+                "6",
+                "-evalue",
+                str(evalue),
+                "-max_target_seqs",
+                str(max_target_seqs),
+            ],
+            execution_payload,
+            path_hints=(db_fasta, query_fasta, output),
+            workdir=output.parent,
+        )
         set_step_state(steps, SEARCH_STEP_BLASTN, STEP_RUNNING)
+        set_step_state(
+            steps,
+            SEARCH_STEP_BLASTN,
+            STEP_RUNNING,
+            backend=blastn_command.backend,
+            raw_command=stringify_command(blastn_command.raw_command),
+            resolved_command=stringify_command(blastn_command.resolved_command),
+            environment_fingerprint=blastn_command.environment_fingerprint,
+        )
         persist("running")
         if not _run_blastn(
             db_fasta,
@@ -476,6 +547,7 @@ def run_blast_search(
             output,
             evalue=evalue,
             max_target_seqs=max_target_seqs,
+            execution=execution_payload,
             quiet=quiet,
             stdout_log=layout.stdout_log,
             stderr_log=layout.stderr_log,
@@ -483,7 +555,7 @@ def run_blast_search(
             failure_summary = build_failure_summary(SEARCH_STEP_BLASTN, stderr_log=layout.stderr_log, fallback="blastn failed")
             failure_details = build_failure_details(
                 step_name=SEARCH_STEP_BLASTN,
-                command=f"blastn -query {query_fasta} -db {db_fasta} -out {output} -outfmt 6 -evalue {evalue} -max_target_seqs {max_target_seqs}",
+                command=stringify_command(blastn_command.resolved_command),
                 layout=layout,
                 error=failure_summary,
             )
@@ -491,7 +563,16 @@ def run_blast_search(
             persist("failed", completed_at=utc_now_iso())
             return None
         hits = parse_blast_tsv(output)
-        set_step_state(steps, SEARCH_STEP_BLASTN, STEP_SUCCESS, outputs={"tsv": str(output)})
+        set_step_state(
+            steps,
+            SEARCH_STEP_BLASTN,
+            STEP_SUCCESS,
+            outputs={"tsv": str(output)},
+            backend=blastn_command.backend,
+            raw_command=stringify_command(blastn_command.raw_command),
+            resolved_command=stringify_command(blastn_command.resolved_command),
+            environment_fingerprint=blastn_command.environment_fingerprint,
+        )
         persist("running")
 
     if resume and step_resume_ready(
@@ -499,6 +580,7 @@ def run_blast_search(
         SEARCH_STEP_SUMMARY,
         validator=lambda: _summary_ready(summary_path),
         required_outputs=("summary",),
+        current_execution=execution_payload,
     ):
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         set_step_state(steps, SEARCH_STEP_SUMMARY, STEP_SKIPPED, outputs={"summary": str(summary_path)}, note="reused existing output")

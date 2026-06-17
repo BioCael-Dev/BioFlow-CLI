@@ -20,6 +20,7 @@ from bioflow.bio_tasks import (
     format_sequence_file,
 )
 from bioflow.env_manager import BIO_TOOLS, _check_conda, _check_installed
+from bioflow.execution import build_execution_context
 from bioflow.alignment import run_alignment_pipeline
 from bioflow.config import ConfigError, load_project_config, load_workflow_config
 from bioflow.i18n import init_language, t
@@ -142,23 +143,6 @@ def _json_error_payload(error: str, **extra: Any) -> str:
     """构造 JSON 错误输出。"""
     payload = {"error": error, **extra}
     return json.dumps(payload, ensure_ascii=False)
-
-
-def _build_execution_context(params: dict[str, Any], *, source: str) -> dict[str, Any]:
-    """构造统一 execution 元数据。"""
-    return {
-        "profile": str(params.get("profile") or "local"),
-        "backend": str(params.get("backend") or "system"),
-        "conda_env": str(params["conda_env"]) if params.get("conda_env") is not None else None,
-        "container_image": str(params["container_image"]) if params.get("container_image") is not None else None,
-        "resources": {
-            "threads": int(params["threads"]) if params.get("threads") is not None else None,
-            "memory": str(params["memory"]) if params.get("memory") is not None else None,
-            "queue": str(params["queue"]) if params.get("queue") is not None else None,
-            "time_limit": str(params["time_limit"]) if params.get("time_limit") is not None else None,
-        },
-        "source": source,
-    }
 
 
 def cmd_seq(args: argparse.Namespace) -> int:
@@ -483,7 +467,7 @@ def cmd_qc(args: argparse.Namespace) -> int:
     adapter = str(params["adapter"]) if params["adapter"] else None
     minlen = int(params["minlen"])
     resume = bool(params["resume"])
-    execution = _build_execution_context(params, source="cli_or_config")
+    execution = build_execution_context(params, source="cli_or_config")
 
     if minlen <= 0:
         if args.json:
@@ -599,7 +583,7 @@ def cmd_align(args: argparse.Namespace) -> int:
     input_path, input_r1_path, input_r2_path = inputs
     threads = int(params["threads"])
     resume = bool(params["resume"])
-    execution = _build_execution_context(params, source="cli_or_config")
+    execution = build_execution_context(params, source="cli_or_config")
 
     # 参数校验
     if not ref_path.exists():
@@ -819,7 +803,7 @@ def cmd_search(args: argparse.Namespace) -> int:
     max_target_seqs = int(params["max_target_seqs"])
     top_n = int(params["top"])
     resume = bool(params["resume"])
-    execution = _build_execution_context(params, source="cli_or_config")
+    execution = build_execution_context(params, source="cli_or_config")
 
     if not db_path.exists():
         if args.json:

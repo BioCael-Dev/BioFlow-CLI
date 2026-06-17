@@ -13,6 +13,7 @@ from rich.console import Console
 from bioflow import __version__
 from bioflow.alignment import run_alignment_pipeline
 from bioflow.config import merge_project_sample_defaults
+from bioflow.execution import build_execution_context
 from bioflow.pipeline import run_qc_pipeline
 from bioflow.preflight import PreflightError
 from bioflow.report import generate_report
@@ -86,6 +87,7 @@ def _run_project_job(run_dir: Path, sample: dict[str, Any]) -> ProjectJobResult:
     """执行单个项目样本任务。"""
     workflow = str(sample["workflow"])
     sample_id = str(sample["sample_id"])
+    execution = build_execution_context(sample, source="project_config")
 
     try:
         if workflow == "qc":
@@ -97,6 +99,7 @@ def _run_project_job(run_dir: Path, sample: dict[str, Any]) -> ProjectJobResult:
                 adapter=str(sample["adapter"]) if sample.get("adapter") else None,
                 minlen=int(sample.get("minlen", 36)),
                 resume=bool(sample.get("resume", False)),
+                execution=execution,
                 cli_mode=True,
             )
             if not success:
@@ -118,6 +121,7 @@ def _run_project_job(run_dir: Path, sample: dict[str, Any]) -> ProjectJobResult:
                 outdir=run_dir,
                 threads=int(sample.get("threads", 1)),
                 resume=bool(sample.get("resume", False)),
+                execution=execution,
                 cli_mode=True,
             )
             if stats is None:
@@ -139,6 +143,7 @@ def _run_project_job(run_dir: Path, sample: dict[str, Any]) -> ProjectJobResult:
                 max_target_seqs=int(sample.get("max_target_seqs", 10)),
                 top_n=int(sample.get("top", 5)),
                 resume=bool(sample.get("resume", False)),
+                execution=execution,
                 cli_mode=True,
             )
             if result is None:

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from bioflow import __version__
+from bioflow.execution import build_environment_fingerprint
 
 
 @dataclass
@@ -217,10 +218,26 @@ def step_resume_ready(
     *,
     validator: Callable[[], bool],
     required_outputs: tuple[str, ...] = (),
+    current_execution: dict[str, Any] | None = None,
 ) -> bool:
     """更严格地判断某一步是否可安全 resume。"""
     if not metadata_supports_resume(metadata, step_name):
         return False
+
+    if current_execution is not None:
+        current_fingerprint = build_environment_fingerprint(current_execution)
+        step = metadata["steps"][step_name]
+        step_fingerprint = step.get("environment_fingerprint")
+        metadata_execution = metadata.get("execution")
+        fallback_fingerprint = (
+            build_environment_fingerprint(metadata_execution)
+            if isinstance(metadata_execution, dict)
+            else None
+        )
+        if step_fingerprint not in {current_fingerprint, None}:
+            return False
+        if step_fingerprint is None and fallback_fingerprint not in {None, current_fingerprint}:
+            return False
 
     step = metadata["steps"][step_name]
     outputs = step.get("outputs")
@@ -322,6 +339,10 @@ def set_step_state(
     outputs: dict[str, Any] | None = None,
     note: str | None = None,
     error: str | None = None,
+    backend: str | None = None,
+    raw_command: str | None = None,
+    resolved_command: str | None = None,
+    environment_fingerprint: str | None = None,
 ) -> None:
     """更新单个步骤状态。"""
     now = utc_now_iso()
@@ -342,6 +363,14 @@ def set_step_state(
         step["error"] = error
     elif status != STEP_FAILED:
         step.pop("error", None)
+    if backend is not None:
+        step["backend"] = backend
+    if raw_command is not None:
+        step["raw_command"] = raw_command
+    if resolved_command is not None:
+        step["resolved_command"] = resolved_command
+    if environment_fingerprint is not None:
+        step["environment_fingerprint"] = environment_fingerprint
     steps[step_name] = step
 
 

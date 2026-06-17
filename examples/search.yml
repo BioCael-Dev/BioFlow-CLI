@@ -8,6 +8,8 @@ search:
   container_image: ghcr.io/biocael-dev/bioflow-cli:latest
   threads: 2
   memory: 4G
+  queue: short
+  time_limit: "01:00:00"
   evalue: 1e-5
   max_target_seqs: 20
   top: 5
