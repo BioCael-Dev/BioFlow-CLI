@@ -196,8 +196,8 @@ bioflow search --db ref.fa --query query.fa --outdir runs/search-001 --resume
 # 为单次运行导出 HTML 报告
 bioflow report --input runs/qc-001 --output qc-report.html
 
-# 为目录下多次运行导出汇总 HTML 报告
-bioflow report --input runs --output runs-report.html --title "BioFlow 运行汇总"
+# 为目录下多次运行导出汇总 HTML 报告和结构化汇总
+bioflow report --input runs --output runs-report.html --summary-json summary.json --summary-tsv summary.tsv --title "BioFlow 运行汇总"
 
 # 检查运行目录状态、关键输出和日志路径
 bioflow inspect --input runs/qc-001
@@ -261,7 +261,7 @@ bioflow --json batch -i ./data -o ./formatted
 - 可通过 `--outdir` 指定运行根目录；未指定时会在输入文件旁自动创建 `qc_run`、`align_run` 或 `search_run`
 - 每次运行都会生成 `logs/`、`results/`、`tmp/` 和 `metadata.json`
 - `bioflow project` 会在项目根目录下生成按样本划分的运行目录，例如 `001-sample-qc-qc`
-- 项目级运行还会额外生成 `project_summary.json` 和 `project_report.html`
+- 项目级运行还会额外生成 `project_summary.json`、`summary.json`、`summary.tsv` 和 `project_report.html`
 - `metadata.json` 现在额外记录输入文件大小 / 修改时间 / sha256、运行环境、工具版本和失败摘要
 - `metadata.json` 现在还会写入统一的 `execution` 区块，记录 `profile`、`backend`、`conda_env`、`container_image`、资源请求参数和参数来源
 - 每个 workflow step 现在还会记录 backend、原始命令、最终解析命令和环境指纹
@@ -303,6 +303,7 @@ bioflow --json batch -i ./data -o ./formatted
 
 - `bioflow report --input <run_dir>` 可基于 `metadata.json` 导出单次运行报告
 - `bioflow report --input <parent_dir>` 会扫描其一级子目录并合并多次运行结果
+- `bioflow report --summary-json summary.json --summary-tsv summary.tsv` 可导出供下游脚本读取的聚合结果
 - 生成的报告现在包含概览统计、workflow/status 筛选、运行导航，以及按 workflow 提取的核心输出摘要
 - QC 报告会汇总 trimmed 输出和 FastQC 结果目录
 - align 报告会汇总 BAM / BAI / flagstat 输出以及关键比对指标
@@ -333,7 +334,7 @@ pip install -e .[dev]
 
 ## 项目状态
 
-当前开发版本：**v0.8.2**
+当前开发版本：**v0.9.0**
 
 ## 许可证
 

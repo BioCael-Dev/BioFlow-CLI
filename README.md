@@ -35,8 +35,8 @@ License text: [MIT License](LICENSE)
   - Tabular result output (`outfmt 6`) for downstream analysis
 - **QC Pipeline**: Integrated FastQC + Trimmomatic workflow for single-end and paired-end reads
 - **Run Inspection**: `bioflow inspect` summarizes run status, critical outputs, failed steps, and log locations
-- **HTML Run Reports**: Export one or more workflow runs into a portable single-file HTML summary with overview stats, filtering, and run navigation
-- **Project Batch**: `bioflow project` executes mixed QC / alignment / search samples from one YAML file and emits a project summary plus combined HTML report
+- **HTML Run Reports**: Export one or more workflow runs into a portable single-file HTML summary with overview stats, filtering, run navigation, and structured JSON/TSV summaries
+- **Project Batch**: `bioflow project` executes mixed QC / alignment / search samples from one YAML file and emits project summaries plus a combined HTML report
 - **Failure Diagnostics**: Unified failure output across workflows with failed step, failed command, stderr tail, and direct log paths
 - **YAML Workflow Config**: run QC / alignment / search from reusable config files
 - **Structured Output**: `--json` output for automation pipelines
@@ -153,8 +153,8 @@ bioflow search --db ref.fa --query query.fa --outdir runs/search-001 --resume
 # Export an HTML report for one run
 bioflow report --input runs/qc-001 --output qc-report.html
 
-# Export a combined HTML report for multiple runs under one directory
-bioflow report --input runs --output runs-report.html --title "BioFlow Run Summary"
+# Export a combined HTML report plus structured summaries
+bioflow report --input runs --output runs-report.html --summary-json summary.json --summary-tsv summary.tsv --title "BioFlow Run Summary"
 
 # Inspect run metadata, outputs, and diagnostics
 bioflow inspect --input runs/qc-001
@@ -207,7 +207,6 @@ bioflow --json batch -i ./data -o ./formatted
 - parameter precedence is: explicit CLI argument > YAML config > built-in default
 - `qc` and `align` support either `input` or the `input_r1` + `input_r2` pair
 - `input` cannot be combined with `input_r1` / `input_r2`
-- `project` config uses a top-level `project:` section optionally, and supports `outdir`, `continue_on_error`, `report_title`, and `samples`
 - `qc`, `align`, and `search` configs also support execution metadata fields: `profile`, `threads`, `memory`, `queue`, `time_limit`, `backend`, `conda_env`, and `container_image`
 - `project` config uses a top-level `project:` section optionally, and supports `outdir`, `continue_on_error`, `report_title`, `profile`, `threads`, `memory`, `queue`, `time_limit`, `backend`, `conda_env`, `container_image`, and `samples`
 - each `samples` item requires `sample_id`, `workflow`, and that workflow's normal required fields
@@ -221,7 +220,7 @@ bioflow --json batch -i ./data -o ./formatted
 - set `--outdir` to control the run root; if omitted, BioFlow-CLI creates `qc_run`, `align_run`, or `search_run` beside the input file
 - each run contains `logs/`, `results/`, `tmp/`, and `metadata.json`
 - `bioflow project` creates one project root with per-sample run directories such as `001-sample-qc-qc`
-- each project run also writes `project_summary.json` and `project_report.html`
+- each project run also writes `project_summary.json`, `summary.json`, `summary.tsv`, and `project_report.html`
 - metadata now records input file size / mtime / sha256, runtime environment, tool versions, and failure summary
 - metadata now also writes an `execution` block with `profile`, `backend`, `conda_env`, `container_image`, requested resources, and parameter source
 - each workflow step now records its backend, raw command, resolved command, and environment fingerprint
@@ -263,6 +262,7 @@ bioflow --json batch -i ./data -o ./formatted
 
 - `bioflow report --input <run_dir>` exports a single-run HTML report from `metadata.json`
 - `bioflow report --input <parent_dir>` scans immediate subdirectories and combines multiple runs into one report
+- `bioflow report --summary-json summary.json --summary-tsv summary.tsv` exports reusable aggregate data for downstream scripts
 - the generated report now includes overview statistics, workflow/status filters, run navigation, and workflow-specific core output summaries
 - QC reports summarize trimmed outputs and FastQC result directories
 - alignment reports summarize BAM / BAI / flagstat outputs and key mapping metrics
@@ -293,7 +293,7 @@ pip install -e .[dev]
 
 ## Project Status
 
-Current development version: **v0.8.2**
+Current development version: **v0.9.0**
 
 Release history and notes: [GitHub Releases](https://github.com/BioCael-Dev/BioFlow-CLI/releases)
 

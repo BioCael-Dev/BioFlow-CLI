@@ -28,7 +28,7 @@ from bioflow.inspect import inspect_run, render_inspection_text
 from bioflow.pipeline import run_qc_pipeline
 from bioflow.preflight import PreflightError
 from bioflow.project_batch import run_project_batch
-from bioflow.report import generate_report
+from bioflow.report import collect_summary_data, generate_report, write_summary_json, write_summary_tsv
 from bioflow.run_layout import format_failure_diagnostics
 from bioflow.search import run_blast_search
 
@@ -683,6 +683,8 @@ def cmd_report(args: argparse.Namespace) -> int:
     """处理 report 子命令：生成 HTML 运行报告。"""
     input_path = Path(args.input)
     output_path = Path(args.output) if args.output else Path("report.html")
+    summary_json_path = Path(args.summary_json) if getattr(args, "summary_json", None) else None
+    summary_tsv_path = Path(args.summary_tsv) if getattr(args, "summary_tsv", None) else None
     title = args.title if hasattr(args, "title") and args.title else None
     quiet = args.quiet or args.json
 
@@ -698,12 +700,21 @@ def cmd_report(args: argparse.Namespace) -> int:
             console_err.print(t("report_generating"), style="cyan")
 
         result_path = generate_report(input_path, output_path, title=title)
+        summary_data = None
+        if summary_json_path is not None or summary_tsv_path is not None:
+            summary_data = collect_summary_data(input_path)
+        if summary_json_path is not None and summary_data is not None:
+            write_summary_json(summary_data, summary_json_path)
+        if summary_tsv_path is not None and summary_data is not None:
+            write_summary_tsv(summary_data, summary_tsv_path)
 
         if args.json:
             print(json.dumps({
                 "status": "success",
                 "input": str(input_path),
                 "output": str(result_path),
+                "summary_json": str(summary_json_path) if summary_json_path is not None else "",
+                "summary_tsv": str(summary_tsv_path) if summary_tsv_path is not None else "",
             }, ensure_ascii=False))
         elif not quiet:
             console_err.print(t("report_done", path=str(result_path)), style="bold green")
@@ -1076,6 +1087,8 @@ def main() -> int:
     parser_report.add_argument("--input", "-i", required=True, help="Run directory or parent directory containing runs")
     parser_report.add_argument("--output", "-o", help="Output HTML file (default: report.html)")
     parser_report.add_argument("--title", help="Custom report title")
+    parser_report.add_argument("--summary-json", dest="summary_json", help="Optional structured summary JSON output")
+    parser_report.add_argument("--summary-tsv", dest="summary_tsv", help="Optional structured summary TSV output")
 
     # project 子命令
     parser_project = subparsers.add_parser("project", help="Run project-level workflow batch from YAML")

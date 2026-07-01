@@ -176,6 +176,7 @@ def test_run_project_batch_writes_summary_and_report(tmp_path: Path, monkeypatch
                     "status": "success",
                     "started_at": "2026-05-21T00:00:00Z",
                     "outputs": {"trimmed": str(outdir / "results" / "reads.trimmed.fastq")},
+                    "stats": {"reads": 4, "trimmed_reads": 4},
                 }
             ),
             encoding="utf-8",
@@ -192,6 +193,7 @@ def test_run_project_batch_writes_summary_and_report(tmp_path: Path, monkeypatch
                     "status": "success",
                     "started_at": "2026-05-21T00:01:00Z",
                     "outputs": {"tsv": str(outdir / "results" / "hits.tsv")},
+                    "summary": {"hit_count": 1, "best_hit": {"subject_id": "refA"}},
                 }
             ),
             encoding="utf-8",
@@ -216,6 +218,8 @@ def test_run_project_batch_writes_summary_and_report(tmp_path: Path, monkeypatch
     assert result["planned_sample_count"] == 2
     assert result["sample_count"] == 2
     assert Path(result["summary"]).exists()
+    assert Path(result["summary_json"]).exists()
+    assert Path(result["summary_tsv"]).exists()
     assert Path(result["report"]).exists()
     assert Path(result["report"]).read_text(encoding="utf-8") == "project-001|Demo Project"
 
@@ -223,7 +227,17 @@ def test_run_project_batch_writes_summary_and_report(tmp_path: Path, monkeypatch
     assert summary["status"] == "success"
     assert summary["planned_sample_count"] == 2
     assert summary["report"] == result["report"]
+    assert summary["summary_json"] == result["summary_json"]
+    assert summary["summary_tsv"] == result["summary_tsv"]
     assert [sample["workflow"] for sample in summary["samples"]] == ["qc", "search"]
+
+    aggregate = json.loads(Path(result["summary_json"]).read_text(encoding="utf-8"))
+    assert aggregate["schema_version"] == "bioflow.summary.v1"
+    assert aggregate["project"]["planned_sample_count"] == 2
+    assert aggregate["workflow_counts"] == {"qc": 1, "search": 1}
+    assert aggregate["runs"][0]["metrics"]["trimmed_reads"] == 4
+    assert aggregate["runs"][1]["metrics"]["hit_count"] == 1
+    assert "\tqc\tsuccess\t" in Path(result["summary_tsv"]).read_text(encoding="utf-8")
 
 
 def test_run_project_batch_passes_execution_to_workflows(tmp_path: Path, monkeypatch) -> None:
@@ -252,7 +266,7 @@ def test_run_project_batch_passes_execution_to_workflows(tmp_path: Path, monkeyp
         outdir = kwargs["outdir"]
         outdir.mkdir(parents=True, exist_ok=True)
         (outdir / "metadata.json").write_text(
-            json.dumps({"workflow": "qc", "status": "success", "outputs": {}}),
+            json.dumps({"workflow": "qc", "status": "success", "started_at": "2026-05-21T00:00:00Z", "outputs": {}}),
             encoding="utf-8",
         )
         return True

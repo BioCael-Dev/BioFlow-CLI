@@ -151,3 +151,63 @@ def test_generate_report_renders_workflow_specific_core_outputs(tmp_path: Path) 
     assert "80.00%" in html
     assert "refA" in html
     assert "reads_1.paired.fastq" in html
+
+
+def test_collect_summary_data_and_write_structured_exports(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    _write_metadata(
+        runs_root / "align-001",
+        {
+            "workflow": "align",
+            "version": "0.9.0",
+            "status": "success",
+            "started_at": "2026-07-01T00:00:00Z",
+            "completed_at": "2026-07-01T00:10:00Z",
+            "command": "align",
+            "parameters": {"sample_id": "sample-a"},
+            "outputs": {
+                "bam": "/tmp/reads.sorted.bam",
+                "bai": "/tmp/reads.sorted.bam.bai",
+                "flagstat": "/tmp/reads.sorted.flagstat.txt",
+            },
+            "stats": {"total": 10, "mapped": 8, "mapping_rate": 0.8},
+            "steps": {},
+        },
+    )
+    _write_metadata(
+        runs_root / "search-001",
+        {
+            "workflow": "search",
+            "version": "0.9.0",
+            "status": "success",
+            "started_at": "2026-07-01T00:20:00Z",
+            "completed_at": "2026-07-01T00:25:00Z",
+            "command": "search",
+            "outputs": {"tsv": "/tmp/query.blast.tsv"},
+            "summary": {"hit_count": 2, "best_hit": {"subject_id": "refA"}, "top_hits": []},
+            "steps": {},
+        },
+    )
+
+    data = report.collect_summary_data(runs_root, project={"project_root": str(runs_root)})
+
+    assert data["schema_version"] == "bioflow.summary.v1"
+    assert data["total_runs"] == 2
+    assert data["workflow_counts"] == {"align": 1, "search": 1}
+    assert data["runs"][0]["sample_id"] == "sample-a"
+    assert data["runs"][0]["key_metric"] == "mapping_rate"
+    assert data["runs"][0]["key_metric_value"] == 0.8
+    assert data["runs"][1]["metrics"]["hit_count"] == 2
+    assert data["runs"][1]["metrics"]["best_hit"] == "refA"
+
+    json_path = tmp_path / "summary.json"
+    tsv_path = tmp_path / "summary.tsv"
+    report.write_summary_json(data, json_path)
+    report.write_summary_tsv(data, tsv_path)
+
+    saved = json.loads(json_path.read_text(encoding="utf-8"))
+    assert saved["project"]["project_root"] == str(runs_root)
+    tsv = tsv_path.read_text(encoding="utf-8")
+    assert tsv.startswith("run_dir\tsample_id\tworkflow\tstatus")
+    assert "sample-a\talign\tsuccess" in tsv
+    assert '""mapping_rate"": 0.8' in tsv

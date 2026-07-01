@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import csv
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Iterable, Protocol
 
 import questionary
 from rich.console import Console
@@ -54,6 +55,21 @@ class ReportOverview:
     status_counts: dict[str, int]
     workflow_counts: dict[str, int]
     workflow_status_counts: dict[str, dict[str, int]]
+
+
+SUMMARY_TSV_COLUMNS = (
+    "run_dir",
+    "sample_id",
+    "workflow",
+    "status",
+    "started_at",
+    "completed_at",
+    "version",
+    "key_metric",
+    "key_metric_value",
+    "outputs",
+    "metrics",
+)
 
 
 def parse_metadata(run_dir: Path) -> RunInfo:
@@ -310,6 +326,145 @@ def _build_overview(runs: list[RunInfo]) -> ReportOverview:
         workflow_counts=workflow_counts,
         workflow_status_counts=workflow_status_counts,
     )
+
+
+def _sample_id(run: RunInfo) -> str:
+    """Return the most stable sample id available for one run."""
+    for source in (run.parameters, run.inputs, run.summary):
+        value = source.get("sample_id") if isinstance(source, dict) else None
+        if value not in (None, ""):
+            return str(value)
+    return run.run_dir.name
+
+
+def _metric_payload(run: RunInfo) -> dict[str, Any]:
+    """Return workflow metrics using stable top-level metric keys."""
+    metrics: dict[str, Any] = {}
+    if run.workflow == "qc":
+        for key in ("reads", "trimmed_reads", "trimmed_bases", "avg_q", "q20_ratio", "q30_ratio"):
+            if key in run.stats:
+                metrics[key] = run.stats[key]
+            elif key in run.summary:
+                metrics[key] = run.summary[key]
+    elif run.workflow == "align":
+        for key in ("total", "mapped", "unmapped", "mapping_rate", "paired", "properly_paired"):
+            if key in run.stats:
+                metrics[key] = run.stats[key]
+    elif run.workflow == "search":
+        for key in ("hit_count", "best_identity", "best_bitscore", "min_evalue"):
+            if key in run.summary:
+                metrics[key] = run.summary[key]
+        best_hit = run.summary.get("best_hit")
+        if isinstance(best_hit, dict) and best_hit.get("subject_id") not in (None, ""):
+            metrics["best_hit"] = best_hit["subject_id"]
+
+    for key, value in run.stats.items():
+        metrics.setdefault(key, value)
+    for key, value in run.summary.items():
+        if key != "top_hits":
+            metrics.setdefault(key, value)
+    return metrics
+
+
+def _key_metric(run: RunInfo, metrics: dict[str, Any]) -> tuple[str, Any]:
+    """Pick one compact metric for TSV scanning."""
+    preferred_by_workflow = {
+        "qc": ("trimmed_reads", "reads", "avg_q"),
+        "align": ("mapping_rate", "mapped", "total"),
+        "search": ("hit_count", "best_hit", "best_bitscore"),
+    }
+    for key in preferred_by_workflow.get(run.workflow, ()):
+        if key in metrics:
+            return key, metrics[key]
+    for key, value in metrics.items():
+        return key, value
+    return "", ""
+
+
+def _run_summary_record(run: RunInfo) -> dict[str, Any]:
+    """Convert one run into the structured summary record."""
+    outputs = _core_outputs(run)
+    metrics = _metric_payload(run)
+    key_metric, key_metric_value = _key_metric(run, metrics)
+    return {
+        "run_dir": str(run.run_dir),
+        "sample_id": _sample_id(run),
+        "workflow": run.workflow,
+        "status": run.status,
+        "started_at": run.started_at,
+        "completed_at": run.completed_at,
+        "version": run.version,
+        "command": run.command,
+        "outputs": outputs,
+        "metrics": metrics,
+        "key_metric": key_metric,
+        "key_metric_value": key_metric_value,
+        "failure_summary": run.failure_summary,
+    }
+
+
+def _json_cell(value: Any) -> str:
+    """Serialize a value for one TSV cell."""
+    if value in (None, ""):
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value)
+
+
+def collect_summary_data(input_path: Path, *, project: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Collect reusable aggregate summary data from run metadata."""
+    runs = discover_runs(input_path)
+    return collect_summary_data_from_runs(runs, source=input_path, project=project)
+
+
+def collect_summary_data_from_runs(
+    runs: list[RunInfo],
+    *,
+    source: Path | str,
+    project: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Collect reusable aggregate summary data from already parsed runs."""
+    if not runs:
+        raise FileNotFoundError(t("report_no_runs", path=str(source)))
+
+    overview = _build_overview(runs)
+    run_records = [_run_summary_record(run) for run in runs]
+    return {
+        "schema_version": "bioflow.summary.v1",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": str(source),
+        "project": project or {},
+        "total_runs": overview.total_runs,
+        "status_counts": overview.status_counts,
+        "workflow_counts": overview.workflow_counts,
+        "workflow_status_counts": overview.workflow_status_counts,
+        "runs": run_records,
+    }
+
+
+def write_summary_json(data: dict[str, Any], output_path: Path) -> Path:
+    """Write structured aggregate summary JSON."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return output_path
+
+
+def write_summary_tsv(data: dict[str, Any], output_path: Path) -> Path:
+    """Write a stable TSV projection of aggregate summary data."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    runs = data.get("runs", [])
+    if not isinstance(runs, Iterable):
+        runs = []
+
+    with output_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SUMMARY_TSV_COLUMNS, dialect="excel-tab")
+        writer.writeheader()
+        for record in runs:
+            if not isinstance(record, dict):
+                continue
+            writer.writerow({column: _json_cell(record.get(column, "")) for column in SUMMARY_TSV_COLUMNS})
+    return output_path
 
 
 def _core_outputs(run: RunInfo) -> dict[str, Any]:

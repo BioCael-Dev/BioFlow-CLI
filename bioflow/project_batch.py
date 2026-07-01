@@ -16,7 +16,13 @@ from bioflow.config import merge_project_sample_defaults
 from bioflow.execution import build_execution_context
 from bioflow.pipeline import run_qc_pipeline
 from bioflow.preflight import PreflightError
-from bioflow.report import generate_report
+from bioflow.report import (
+    collect_summary_data_from_runs,
+    generate_report,
+    parse_metadata,
+    write_summary_json,
+    write_summary_tsv,
+)
 from bioflow.run_layout import read_metadata, utc_now_iso
 from bioflow.search import run_blast_search
 
@@ -183,6 +189,8 @@ def _write_project_summary(
     continue_on_error: bool,
     report_path: Path | None = None,
     planned_sample_count: int,
+    summary_json_path: Path | None = None,
+    summary_tsv_path: Path | None = None,
 ) -> Path:
     """写入项目级汇总 JSON。"""
     success_count = sum(1 for item in samples if item.status == "success")
@@ -204,6 +212,8 @@ def _write_project_summary(
         "failed_count": failed_count,
         "continue_on_error": continue_on_error,
         "report": str(report_path) if report_path is not None and report_path.exists() else "",
+        "summary_json": str(summary_json_path) if summary_json_path is not None and summary_json_path.exists() else "",
+        "summary_tsv": str(summary_tsv_path) if summary_tsv_path is not None and summary_tsv_path.exists() else "",
         "samples": [item.as_dict() for item in samples],
         "workflow_counts": {
             workflow: sum(1 for item in samples if item.workflow == workflow)
@@ -281,6 +291,30 @@ def run_project_batch(
         )
 
     completed_at = utc_now_iso()
+    summary_json_path: Path | None = None
+    summary_tsv_path: Path | None = None
+    parsed_runs = []
+    for item in results:
+        if not (item.run_dir.is_dir() and item.metadata_path.exists()):
+            continue
+        try:
+            parsed_runs.append(parse_metadata(item.run_dir))
+        except (FileNotFoundError, ValueError):
+            continue
+    if parsed_runs:
+        aggregate_data = collect_summary_data_from_runs(
+            parsed_runs,
+            source=project_root,
+            project={
+                "project_root": str(project_root),
+                "config": str(config_path),
+                "planned_sample_count": planned_sample_count,
+                "continue_on_error": continue_on_error,
+            },
+        )
+        summary_json_path = write_summary_json(aggregate_data, project_root / "summary.json")
+        summary_tsv_path = write_summary_tsv(aggregate_data, project_root / "summary.tsv")
+
     summary_path = _write_project_summary(
         project_root,
         samples=results,
@@ -289,6 +323,8 @@ def run_project_batch(
         continue_on_error=continue_on_error,
         report_path=report_path,
         planned_sample_count=planned_sample_count,
+        summary_json_path=summary_json_path,
+        summary_tsv_path=summary_tsv_path,
     )
 
     success_count = sum(1 for item in results if item.status == "success")
@@ -300,6 +336,8 @@ def run_project_batch(
         "project_root": str(project_root),
         "config": str(config_path),
         "summary": str(summary_path),
+        "summary_json": str(summary_json_path) if summary_json_path is not None else "",
+        "summary_tsv": str(summary_tsv_path) if summary_tsv_path is not None else "",
         "report": str(report_path) if report_path is not None else "",
         "sample_count": len(results),
         "planned_sample_count": planned_sample_count,
