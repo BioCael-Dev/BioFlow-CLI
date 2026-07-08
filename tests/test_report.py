@@ -159,7 +159,7 @@ def test_collect_summary_data_and_write_structured_exports(tmp_path: Path) -> No
         runs_root / "align-001",
         {
             "workflow": "align",
-            "version": "0.9.0",
+            "version": "0.9.1",
             "status": "success",
             "started_at": "2026-07-01T00:00:00Z",
             "completed_at": "2026-07-01T00:10:00Z",
@@ -178,7 +178,7 @@ def test_collect_summary_data_and_write_structured_exports(tmp_path: Path) -> No
         runs_root / "search-001",
         {
             "workflow": "search",
-            "version": "0.9.0",
+            "version": "0.9.1",
             "status": "success",
             "started_at": "2026-07-01T00:20:00Z",
             "completed_at": "2026-07-01T00:25:00Z",
@@ -211,3 +211,72 @@ def test_collect_summary_data_and_write_structured_exports(tmp_path: Path) -> No
     assert tsv.startswith("run_dir\tsample_id\tworkflow\tstatus")
     assert "sample-a\talign\tsuccess" in tsv
     assert '""mapping_rate"": 0.8' in tsv
+
+
+def test_generate_report_renders_multiqc_style_sections(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    _write_metadata(
+        runs_root / "qc-001",
+        {
+            "workflow": "qc",
+            "version": "0.9.1",
+            "status": "success",
+            "started_at": "2026-07-08T00:00:00Z",
+            "completed_at": "2026-07-08T00:03:00Z",
+            "command": "qc",
+            "parameters": {"sample_id": "sample-qc"},
+            "outputs": {"trimmed": "/tmp/sample-qc.trimmed.fastq"},
+            "stats": {"trimmed_reads": 1200},
+            "steps": {},
+        },
+    )
+    _write_metadata(
+        runs_root / "align-001",
+        {
+            "workflow": "align",
+            "version": "0.9.1",
+            "status": "success",
+            "started_at": "2026-07-08T00:05:00Z",
+            "completed_at": "2026-07-08T00:15:00Z",
+            "command": "align",
+            "parameters": {"sample_id": "sample-align"},
+            "outputs": {"bam": "/tmp/sample-align.bam"},
+            "stats": {"mapped": 900, "mapping_rate": 0.75},
+            "steps": {},
+        },
+    )
+    _write_metadata(
+        runs_root / "search-001",
+        {
+            "workflow": "search",
+            "version": "0.9.1",
+            "status": "failed",
+            "started_at": "2026-07-08T00:20:00Z",
+            "completed_at": "2026-07-08T00:21:00Z",
+            "command": "search",
+            "parameters": {"sample_id": "sample-search"},
+            "outputs": {"tsv": "/tmp/sample-search.tsv"},
+            "summary": {"hit_count": 0},
+            "failure_summary": "blastn: database missing",
+            "steps": {},
+        },
+    )
+
+    html_path = tmp_path / "report.html"
+    report.generate_report(runs_root, html_path, title="multiqc")
+    html = html_path.read_text(encoding="utf-8")
+
+    assert "Success Rate" in html
+    assert "66.7%" in html
+    assert "Workflow Summaries" in html
+    assert "Failure Summary" in html
+    assert "blastn: database missing" in html
+    assert "Avg Mapping Rate" in html
+    assert "75.00%" in html
+    assert "Trimmed Reads" in html
+    assert "1,200" in html
+    assert 'data-report-search' in html
+    assert 'data-report-sort' in html
+    assert 'data-run-list' in html
+    assert 'data-sample="sample-align"' in html
+    assert 'data-search="' in html

@@ -30,7 +30,7 @@ BioFlow-CLI 是一个基于 **MIT 许可证** 发布的 **开源项目**。
 - **BLAST 检索** — 集成 `makeblastdb` + `blastn` 基础核酸检索流程，输出标准 tabular 结果
 - **QC 流程** — 集成 FastQC + Trimmomatic 的质量控制流水线，支持单端/双端输入
 - **运行检查** — 提供 `bioflow inspect`，可汇总运行状态、关键输出、失败步骤与日志位置
-- **HTML 运行报告** — 可将单次或多次工作流运行导出为单文件 HTML 汇总报告，并提供概览统计、筛选和运行导航
+- **HTML 运行报告** — 可将单次或多次工作流运行导出为单文件 HTML 汇总报告，并提供成功率卡片、失败摘要、样本搜索/排序、workflow 指标和结构化 JSON/TSV 汇总
 - **项目批量运行** — 提供 `bioflow project`，可在一个 YAML 中混合执行 QC / 比对 / 检索样本，并生成项目级汇总与 HTML 报告
 - **失败诊断** — 为失败的 workflow 提供统一 CLI 诊断输出，包括失败步骤、失败命令、stderr 摘要和日志路径
 - **YAML 工作流配置** — 可通过配置文件复用 QC / 比对 / 检索参数
@@ -196,7 +196,7 @@ bioflow search --db ref.fa --query query.fa --outdir runs/search-001 --resume
 # 为单次运行导出 HTML 报告
 bioflow report --input runs/qc-001 --output qc-report.html
 
-# 为目录下多次运行导出汇总 HTML 报告和结构化汇总
+# 为目录下多次运行导出 MultiQC 风格汇总 HTML 报告和结构化汇总
 bioflow report --input runs --output runs-report.html --summary-json summary.json --summary-tsv summary.tsv --title "BioFlow 运行汇总"
 
 # 检查运行目录状态、关键输出和日志路径
@@ -304,7 +304,7 @@ bioflow --json batch -i ./data -o ./formatted
 - `bioflow report --input <run_dir>` 可基于 `metadata.json` 导出单次运行报告
 - `bioflow report --input <parent_dir>` 会扫描其一级子目录并合并多次运行结果
 - `bioflow report --summary-json summary.json --summary-tsv summary.tsv` 可导出供下游脚本读取的聚合结果
-- 生成的报告现在包含概览统计、workflow/status 筛选、运行导航，以及按 workflow 提取的核心输出摘要
+- 生成的报告现在包含成功率卡片、失败摘要、样本搜索、运行排序、workflow/status 筛选、运行导航，以及按 workflow 提取的指标摘要
 - QC 报告会汇总 trimmed 输出和 FastQC 结果目录
 - align 报告会汇总 BAM / BAI / flagstat 输出以及关键比对指标
 - search 报告会汇总 TSV / summary 输出、命中数和最佳命中
@@ -334,7 +334,7 @@ pip install -e .[dev]
 
 ## 项目状态
 
-当前开发版本：**v0.9.0**
+当前开发版本：**v0.9.1**
 
 ## 许可证
 

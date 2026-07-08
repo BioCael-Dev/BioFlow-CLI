@@ -35,7 +35,7 @@ License text: [MIT License](LICENSE)
   - Tabular result output (`outfmt 6`) for downstream analysis
 - **QC Pipeline**: Integrated FastQC + Trimmomatic workflow for single-end and paired-end reads
 - **Run Inspection**: `bioflow inspect` summarizes run status, critical outputs, failed steps, and log locations
-- **HTML Run Reports**: Export one or more workflow runs into a portable single-file HTML summary with overview stats, filtering, run navigation, and structured JSON/TSV summaries
+- **HTML Run Reports**: Export one or more workflow runs into a portable single-file HTML summary with success-rate cards, failure summaries, sample search/sort, workflow metrics, and structured JSON/TSV summaries
 - **Project Batch**: `bioflow project` executes mixed QC / alignment / search samples from one YAML file and emits project summaries plus a combined HTML report
 - **Failure Diagnostics**: Unified failure output across workflows with failed step, failed command, stderr tail, and direct log paths
 - **YAML Workflow Config**: run QC / alignment / search from reusable config files
@@ -153,7 +153,7 @@ bioflow search --db ref.fa --query query.fa --outdir runs/search-001 --resume
 # Export an HTML report for one run
 bioflow report --input runs/qc-001 --output qc-report.html
 
-# Export a combined HTML report plus structured summaries
+# Export a MultiQC-style combined HTML report plus structured summaries
 bioflow report --input runs --output runs-report.html --summary-json summary.json --summary-tsv summary.tsv --title "BioFlow Run Summary"
 
 # Inspect run metadata, outputs, and diagnostics
@@ -263,7 +263,7 @@ bioflow --json batch -i ./data -o ./formatted
 - `bioflow report --input <run_dir>` exports a single-run HTML report from `metadata.json`
 - `bioflow report --input <parent_dir>` scans immediate subdirectories and combines multiple runs into one report
 - `bioflow report --summary-json summary.json --summary-tsv summary.tsv` exports reusable aggregate data for downstream scripts
-- the generated report now includes overview statistics, workflow/status filters, run navigation, and workflow-specific core output summaries
+- the generated report now includes success-rate cards, failure summaries, sample search, run sorting, workflow/status filters, run navigation, and workflow-specific metric summaries
 - QC reports summarize trimmed outputs and FastQC result directories
 - alignment reports summarize BAM / BAI / flagstat outputs and key mapping metrics
 - search reports summarize TSV / summary outputs, hit count, and best hit
@@ -293,7 +293,7 @@ pip install -e .[dev]
 
 ## Project Status
 
-Current development version: **v0.9.0**
+Current development version: **v0.9.1**
 
 Release history and notes: [GitHub Releases](https://github.com/BioCael-Dev/BioFlow-CLI/releases)
 
