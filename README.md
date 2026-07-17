@@ -39,6 +39,7 @@ License text: [MIT License](LICENSE)
 - **Project Batch**: `bioflow project` executes mixed QC / alignment / search samples from one YAML file and emits project summaries plus a combined HTML report
 - **Failure Diagnostics**: Unified failure output across workflows with failed step, failed command, stderr tail, and direct log paths
 - **YAML Workflow Config**: run QC / alignment / search from reusable config files
+- **Workflow Manifest**: built-in manifests describe workflow inputs, key outputs, supported profiles, and config schema validation
 - **Structured Output**: `--json` output for automation pipelines
 - **Stable Exit Codes**: standardized success/error/dependency signaling
 
@@ -207,6 +208,8 @@ bioflow --json batch -i ./data -o ./formatted
 - parameter precedence is: explicit CLI argument > YAML config > built-in default
 - `qc` and `align` support either `input` or the `input_r1` + `input_r2` pair
 - `input` cannot be combined with `input_r1` / `input_r2`
+- workflow and project YAML files are validated against built-in workflow manifests before execution
+- manifest-based schema checks catch unknown fields, invalid types, non-positive numeric values, and workflow-specific missing fields early
 - `qc`, `align`, and `search` configs also support execution metadata fields: `profile`, `threads`, `memory`, `queue`, `time_limit`, `backend`, `conda_env`, and `container_image`
 - `project` config uses a top-level `project:` section optionally, and supports `outdir`, `continue_on_error`, `report_title`, `profile`, `threads`, `memory`, `queue`, `time_limit`, `backend`, `conda_env`, `container_image`, and `samples`
 - each `samples` item requires `sample_id`, `workflow`, and that workflow's normal required fields
@@ -221,7 +224,7 @@ bioflow --json batch -i ./data -o ./formatted
 - each run contains `logs/`, `results/`, `tmp/`, and `metadata.json`
 - `bioflow project` creates one project root with per-sample run directories such as `001-sample-qc-qc`
 - each project run also writes `project_summary.json`, `summary.json`, `summary.tsv`, and `project_report.html`
-- metadata now records input file size / mtime / sha256, runtime environment, tool versions, and failure summary
+- metadata now records `metadata_schema_version`, input file size / mtime / sha256, runtime environment, tool versions, and failure summary
 - metadata now also writes an `execution` block with `profile`, `backend`, `conda_env`, `container_image`, requested resources, and parameter source
 - each workflow step now records its backend, raw command, resolved command, and environment fingerprint
 - paired-end `qc` metadata also records `trimmed_r1`, `trimmed_r2`, `unpaired_r1`, and `unpaired_r2`
@@ -293,7 +296,7 @@ pip install -e .[dev]
 
 ## Project Status
 
-Current development version: **v0.9.1**
+Current development version: **v0.9.2**
 
 Release history and notes: [GitHub Releases](https://github.com/BioCael-Dev/BioFlow-CLI/releases)
 

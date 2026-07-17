@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from bioflow.execution import build_environment_fingerprint
-from bioflow.run_layout import create_run_layout, step_resume_ready, write_metadata
+from bioflow.run_layout import METADATA_SCHEMA_VERSION, create_run_layout, step_resume_ready, write_metadata
 
 
 def test_create_run_layout_and_metadata(tmp_path: Path) -> None:
@@ -37,6 +37,7 @@ def test_create_run_layout_and_metadata(tmp_path: Path) -> None:
 
     metadata = json.loads(layout.metadata_path.read_text(encoding="utf-8"))
     assert metadata["workflow"] == "qc"
+    assert metadata["metadata_schema_version"] == METADATA_SCHEMA_VERSION
     assert metadata["status"] == "success"
     assert metadata["logs"]["stdout"].endswith("qc.stdout.log")
     assert metadata["runtime"]["bioflow_version"]

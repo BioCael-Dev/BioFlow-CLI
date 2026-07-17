@@ -7,40 +7,20 @@ from typing import Any
 
 import yaml
 
+from bioflow.registry import (
+    get_workflow_manifest,
+    project_sample_allowed_keys,
+    validate_field_value,
+    workflow_allowed_keys,
+)
 
-WORKFLOW_ALLOWED_KEYS: dict[str, set[str]] = {
-    "qc": {
-        "input", "input_r1", "input_r2", "output", "outdir", "adapter", "minlen", "resume",
-        "profile", "threads", "memory", "queue", "time_limit", "backend", "conda_env", "container_image",
-    },
-    "align": {
-        "ref", "input", "input_r1", "input_r2", "output", "outdir", "threads", "resume",
-        "profile", "memory", "queue", "time_limit", "backend", "conda_env", "container_image",
-    },
-    "search": {
-        "db", "query", "output", "outdir", "evalue", "max_target_seqs", "top", "resume",
-        "profile", "threads", "memory", "queue", "time_limit", "backend", "conda_env", "container_image",
-    },
-}
+WORKFLOW_ALLOWED_KEYS: dict[str, set[str]] = workflow_allowed_keys()
 
 PROJECT_ALLOWED_KEYS: set[str] = {
     "outdir", "continue_on_error", "report_title", "profile", "threads", "memory",
     "queue", "time_limit", "backend", "conda_env", "container_image", "samples",
 }
-PROJECT_SAMPLE_ALLOWED_KEYS: dict[str, set[str]] = {
-    "qc": {
-        "sample_id", "workflow", "input", "input_r1", "input_r2", "adapter", "minlen", "resume",
-        "profile", "threads", "memory", "queue", "time_limit", "backend", "conda_env", "container_image",
-    },
-    "align": {
-        "sample_id", "workflow", "ref", "input", "input_r1", "input_r2", "output", "threads", "resume",
-        "profile", "memory", "queue", "time_limit", "backend", "conda_env", "container_image",
-    },
-    "search": {
-        "sample_id", "workflow", "db", "query", "output", "evalue", "max_target_seqs", "top", "resume",
-        "profile", "threads", "memory", "queue", "time_limit", "backend", "conda_env", "container_image",
-    },
-}
+PROJECT_SAMPLE_ALLOWED_KEYS: dict[str, set[str]] = project_sample_allowed_keys()
 
 EXECUTION_OPTION_KEYS: tuple[str, ...] = (
     "profile", "threads", "memory", "queue", "time_limit", "backend", "conda_env", "container_image",
@@ -49,6 +29,25 @@ EXECUTION_OPTION_KEYS: tuple[str, ...] = (
 
 class ConfigError(Exception):
     """配置文件加载或校验失败。"""
+
+
+def _validate_manifest_fields(
+    data: dict[str, Any],
+    workflow: str,
+    *,
+    context: str,
+    project_sample: bool = False,
+) -> None:
+    """Validate config values using workflow manifest field specs."""
+    manifest = get_workflow_manifest(workflow)
+    specs = manifest.project_fields if project_sample else manifest.fields
+    for key, value in data.items():
+        spec = specs.get(key)
+        if spec is None:
+            continue
+        error = validate_field_value(spec, value, context=context)
+        if error:
+            raise ConfigError(error)
 
 
 def _validate_execution_options(data: dict[str, Any], *, context: str) -> None:
@@ -182,6 +181,7 @@ def load_workflow_config(config_path: Path, workflow: str) -> dict[str, Any]:
 
     if workflow in {"qc", "align"}:
         _validate_single_or_paired_inputs(data, workflow, context=f"{workflow} config")
+    _validate_manifest_fields(data, workflow, context=f"{workflow} config")
     _validate_execution_options(data, context=f"{workflow} config")
 
     return dict(data)
@@ -238,6 +238,12 @@ def load_project_config(config_path: Path) -> dict[str, Any]:
             )
 
         _validate_execution_options(item, context=f"Project sample '{sample_id}'")
+        _validate_manifest_fields(
+            item,
+            workflow,
+            context=f"Project sample '{sample_id}'",
+            project_sample=True,
+        )
 
         if workflow in {"qc", "align"}:
             _validate_single_or_paired_inputs(
@@ -246,17 +252,16 @@ def load_project_config(config_path: Path) -> dict[str, Any]:
                 context=f"Project sample '{sample_id}'",
                 require_input=True,
             )
-        if workflow == "align":
-            ref = item.get("ref")
-            if not isinstance(ref, str) or not ref.strip():
-                raise ConfigError(f"Project sample '{sample_id}' requires non-empty ref")
-        if workflow == "search":
-            db = item.get("db")
-            query = item.get("query")
-            if not isinstance(db, str) or not db.strip():
-                raise ConfigError(f"Project sample '{sample_id}' requires non-empty db")
-            if not isinstance(query, str) or not query.strip():
-                raise ConfigError(f"Project sample '{sample_id}' requires non-empty query")
+        manifest = get_workflow_manifest(workflow)
+        required_fields = tuple(
+            key
+            for key, spec in manifest.project_fields.items()
+            if spec.required_for_project and key not in {"sample_id", "workflow"}
+        )
+        for field in required_fields:
+            value = item.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigError(f"Project sample '{sample_id}' requires non-empty {field}")
 
         validated_samples.append(dict(item))
 

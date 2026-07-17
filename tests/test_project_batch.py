@@ -144,6 +144,30 @@ def test_load_project_config_rejects_container_backend_without_image(tmp_path: P
         raise AssertionError("expected ConfigError")
 
 
+def test_load_project_config_rejects_sample_schema_type_error(tmp_path: Path) -> None:
+    config_path = tmp_path / "project.yml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "samples:",
+                "  - sample_id: bad-search",
+                "    workflow: search",
+                "    db: ref.fa",
+                "    query: query.fa",
+                "    top: five",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        load_project_config(config_path)
+    except ConfigError as exc:
+        assert "'top' must be an integer" in str(exc)
+    else:
+        raise AssertionError("expected ConfigError")
+
+
 def test_run_project_batch_writes_summary_and_report(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / "runs" / "project-001"
     config_path = tmp_path / "project.yml"

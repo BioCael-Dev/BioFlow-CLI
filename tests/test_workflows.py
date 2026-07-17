@@ -932,6 +932,36 @@ def test_align_config_rejects_incomplete_paired_inputs(tmp_path: Path) -> None:
         raise AssertionError("expected ConfigError")
 
 
+def test_workflow_config_rejects_schema_type_errors(tmp_path: Path) -> None:
+    config_path = tmp_path / "search.yml"
+    config_path.write_text(
+        "search:\n  db: ref.fa\n  query: query.fa\n  max_target_seqs: many\n",
+        encoding="utf-8",
+    )
+
+    try:
+        load_workflow_config(config_path, "search")
+    except ConfigError as exc:
+        assert "'max_target_seqs' must be an integer" in str(exc)
+    else:
+        raise AssertionError("expected ConfigError")
+
+
+def test_workflow_config_rejects_non_positive_schema_values(tmp_path: Path) -> None:
+    config_path = tmp_path / "qc.yml"
+    config_path.write_text(
+        "qc:\n  input: reads.fastq\n  minlen: 0\n",
+        encoding="utf-8",
+    )
+
+    try:
+        load_workflow_config(config_path, "qc")
+    except ConfigError as exc:
+        assert "'minlen' must be positive" in str(exc)
+    else:
+        raise AssertionError("expected ConfigError")
+
+
 def test_report_renders_nested_paired_metadata(tmp_path: Path) -> None:
     run_root = tmp_path / "runs" / "qc-pe-003"
     run_root.mkdir(parents=True, exist_ok=True)

@@ -159,7 +159,7 @@ def test_collect_summary_data_and_write_structured_exports(tmp_path: Path) -> No
         runs_root / "align-001",
         {
             "workflow": "align",
-            "version": "0.9.1",
+            "version": "0.9.2",
             "status": "success",
             "started_at": "2026-07-01T00:00:00Z",
             "completed_at": "2026-07-01T00:10:00Z",
@@ -178,7 +178,7 @@ def test_collect_summary_data_and_write_structured_exports(tmp_path: Path) -> No
         runs_root / "search-001",
         {
             "workflow": "search",
-            "version": "0.9.1",
+            "version": "0.9.2",
             "status": "success",
             "started_at": "2026-07-01T00:20:00Z",
             "completed_at": "2026-07-01T00:25:00Z",
@@ -219,7 +219,7 @@ def test_generate_report_renders_multiqc_style_sections(tmp_path: Path) -> None:
         runs_root / "qc-001",
         {
             "workflow": "qc",
-            "version": "0.9.1",
+            "version": "0.9.2",
             "status": "success",
             "started_at": "2026-07-08T00:00:00Z",
             "completed_at": "2026-07-08T00:03:00Z",
@@ -234,7 +234,7 @@ def test_generate_report_renders_multiqc_style_sections(tmp_path: Path) -> None:
         runs_root / "align-001",
         {
             "workflow": "align",
-            "version": "0.9.1",
+            "version": "0.9.2",
             "status": "success",
             "started_at": "2026-07-08T00:05:00Z",
             "completed_at": "2026-07-08T00:15:00Z",
@@ -249,7 +249,7 @@ def test_generate_report_renders_multiqc_style_sections(tmp_path: Path) -> None:
         runs_root / "search-001",
         {
             "workflow": "search",
-            "version": "0.9.1",
+            "version": "0.9.2",
             "status": "failed",
             "started_at": "2026-07-08T00:20:00Z",
             "completed_at": "2026-07-08T00:21:00Z",

@@ -34,6 +34,7 @@ BioFlow-CLI 是一个基于 **MIT 许可证** 发布的 **开源项目**。
 - **项目批量运行** — 提供 `bioflow project`，可在一个 YAML 中混合执行 QC / 比对 / 检索样本，并生成项目级汇总与 HTML 报告
 - **失败诊断** — 为失败的 workflow 提供统一 CLI 诊断输出，包括失败步骤、失败命令、stderr 摘要和日志路径
 - **YAML 工作流配置** — 可通过配置文件复用 QC / 比对 / 检索参数
+- **Workflow Manifest** — 内置 manifest 描述 workflow 输入、关键输出、支持的 profile 和配置 schema 校验规则
 - **结构化输出** — 支持 `--json` 输出，便于自动化集成和脚本调用
 - **标准退出码** — 提供统一的成功 / 参数错误 / 运行时错误 / 依赖缺失状态码
 
@@ -248,6 +249,8 @@ bioflow --json batch -i ./data -o ./formatted
 - 参数优先级为：CLI 显式参数 > YAML 配置 > 内置默认值
 - `qc` 与 `align` 支持二选一输入方式：`input` 或 `input_r1` + `input_r2`
 - `input` 不能与 `input_r1` / `input_r2` 混用
+- workflow 与 project YAML 会在执行前按内置 workflow manifest 进行校验
+- manifest 驱动的 schema 校验可提前发现未知字段、类型错误、非正数参数和 workflow 特定必填字段缺失
 - `qc`、`align`、`search` 配置还支持执行元数据字段：`profile`、`threads`、`memory`、`queue`、`time_limit`、`backend`、`conda_env`、`container_image`
 - `project` 配置可选顶层 `project:` 段，并支持 `outdir`、`continue_on_error`、`report_title`、`profile`、`threads`、`memory`、`queue`、`time_limit`、`backend`、`conda_env`、`container_image`、`samples`
 - `samples` 中每个条目都必须包含 `sample_id`、`workflow` 以及对应 workflow 的必需字段
@@ -262,7 +265,7 @@ bioflow --json batch -i ./data -o ./formatted
 - 每次运行都会生成 `logs/`、`results/`、`tmp/` 和 `metadata.json`
 - `bioflow project` 会在项目根目录下生成按样本划分的运行目录，例如 `001-sample-qc-qc`
 - 项目级运行还会额外生成 `project_summary.json`、`summary.json`、`summary.tsv` 和 `project_report.html`
-- `metadata.json` 现在额外记录输入文件大小 / 修改时间 / sha256、运行环境、工具版本和失败摘要
+- `metadata.json` 现在额外记录 `metadata_schema_version`、输入文件大小 / 修改时间 / sha256、运行环境、工具版本和失败摘要
 - `metadata.json` 现在还会写入统一的 `execution` 区块，记录 `profile`、`backend`、`conda_env`、`container_image`、资源请求参数和参数来源
 - 每个 workflow step 现在还会记录 backend、原始命令、最终解析命令和环境指纹
 - 双端 `qc` 会额外记录 `trimmed_r1`、`trimmed_r2`、`unpaired_r1`、`unpaired_r2`
@@ -334,7 +337,7 @@ pip install -e .[dev]
 
 ## 项目状态
 
-当前开发版本：**v0.9.1**
+当前开发版本：**v0.9.2**
 
 ## 许可证
 

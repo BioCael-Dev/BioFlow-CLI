@@ -36,6 +36,7 @@ STEP_SUCCESS = "success"
 STEP_FAILED = "failed"
 STEP_SKIPPED = "skipped"
 STEP_STATUSES = {STEP_PENDING, STEP_RUNNING, STEP_SUCCESS, STEP_FAILED, STEP_SKIPPED}
+METADATA_SCHEMA_VERSION = "bioflow.metadata.v1"
 
 
 def _safe_stat(path: Path) -> os.stat_result | None:
@@ -394,6 +395,7 @@ def write_metadata(
 ) -> None:
     """写入统一 metadata.json。"""
     payload: dict[str, Any] = {
+        "metadata_schema_version": METADATA_SCHEMA_VERSION,
         "workflow": layout.workflow,
         "version": __version__,
         "status": status,
