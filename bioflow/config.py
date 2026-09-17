@@ -27,6 +27,7 @@ EXECUTION_OPTION_KEYS: tuple[str, ...] = (
 )
 
 LONGREAD_PRESETS: set[str] = {"map-ont", "map-hifi", "map-pb"}
+VARIANT_CALLERS: set[str] = {"bcftools"}
 
 
 class ConfigError(Exception):
@@ -175,6 +176,28 @@ def _validate_longread_config(
         )
 
 
+def _validate_variant_config(
+    data: dict[str, Any],
+    *,
+    context: str,
+    require_inputs: bool = False,
+) -> None:
+    """Validate variant reference, BAM, and caller fields."""
+    if require_inputs:
+        for field in ("ref", "bam"):
+            value = data.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigError(f"{context} requires non-empty {field}")
+    caller = data.get("caller")
+    if caller is not None and caller not in VARIANT_CALLERS:
+        raise ConfigError(
+            f"{context} 'caller' must be one of: {', '.join(sorted(VARIANT_CALLERS))}"
+        )
+    output = data.get("output")
+    if output is not None and (not isinstance(output, str) or not output.endswith(".vcf.gz")):
+        raise ConfigError(f"{context} 'output' must end with .vcf.gz")
+
+
 def _read_yaml_mapping(config_path: Path) -> dict[str, Any]:
     """读取 YAML 并保证顶层是 mapping。"""
     if not config_path.exists():
@@ -230,6 +253,8 @@ def load_workflow_config(config_path: Path, workflow: str) -> dict[str, Any]:
         _validate_rnaseq_design(data, context="rnaseq config")
     if workflow == "longread":
         _validate_longread_config(data, context="longread config")
+    if workflow == "variant":
+        _validate_variant_config(data, context="variant config")
     _validate_manifest_fields(data, workflow, context=f"{workflow} config")
     _validate_execution_options(data, context=f"{workflow} config")
 
@@ -310,6 +335,12 @@ def load_project_config(config_path: Path) -> dict[str, Any]:
             _validate_rnaseq_design(item, context=f"Project sample '{sample_id}'")
         if workflow == "longread":
             _validate_longread_config(
+                item,
+                context=f"Project sample '{sample_id}'",
+                require_inputs=True,
+            )
+        if workflow == "variant":
+            _validate_variant_config(
                 item,
                 context=f"Project sample '{sample_id}'",
                 require_inputs=True,

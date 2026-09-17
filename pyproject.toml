@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bioflow-cli"
-version = "1.0.2"
-description = "A bioinformatics TUI/CLI workflow toolkit with long-read alignment, RNA-seq quantification, project matrices, and i18n support."
+version = "1.1.0"
+description = "A bioinformatics TUI/CLI workflow toolkit with variant calling, long-read alignment, RNA-seq quantification, project matrices, and i18n support."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"

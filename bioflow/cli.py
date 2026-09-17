@@ -33,6 +33,7 @@ from bioflow.report import collect_summary_data, generate_report, write_summary_
 from bioflow.rnaseq import run_rnaseq_pipeline
 from bioflow.run_layout import format_failure_diagnostics
 from bioflow.search import run_blast_search
+from bioflow.variant import VARIANT_CALLERS, run_variant_pipeline
 
 # 退出码标准
 EXIT_SUCCESS = 0
@@ -1203,6 +1204,140 @@ def cmd_longread(args: argparse.Namespace) -> int:
         return EXIT_RUNTIME_ERROR
 
 
+def cmd_variant(args: argparse.Namespace) -> int:
+    """Handle the BCFtools variant calling workflow."""
+    try:
+        params = _merge_workflow_args(
+            args,
+            "variant",
+            {
+                "ref": None,
+                "bam": None,
+                "output": None,
+                "outdir": None,
+                "caller": "bcftools",
+                "min_qual": 20.0,
+                "min_depth": 1,
+                "threads": 1,
+                "sample_id": None,
+                "resume": False,
+                "profile": "local",
+                "memory": None,
+                "queue": None,
+                "time_limit": None,
+                "backend": "system",
+                "conda_env": None,
+                "container_image": None,
+            },
+        )
+    except ConfigError as exc:
+        if args.json:
+            print(json.dumps({"error": "config_error", "message": str(exc)}, ensure_ascii=False))
+        else:
+            console_err.print(f"Error: {exc}", style="bold red")
+        return EXIT_ARGUMENT_ERROR
+
+    missing = next((field for field in ("ref", "bam") if not params[field]), None)
+    if missing is not None:
+        if args.json:
+            print(_json_error_payload("missing_required", field=missing))
+        else:
+            console_err.print(f"Error: {missing} is required (CLI or config)", style="bold red")
+        return EXIT_ARGUMENT_ERROR
+
+    ref = Path(str(params["ref"]))
+    bam = Path(str(params["bam"]))
+    for candidate in (ref, bam):
+        if not candidate.is_file():
+            if args.json:
+                print(json.dumps({"error": "file_not_found", "path": str(candidate)}, ensure_ascii=False))
+            else:
+                console_err.print(t("seq_file_not_found", path=str(candidate)), style="bold red")
+            return EXIT_ARGUMENT_ERROR
+
+    caller = str(params["caller"])
+    min_qual = float(params["min_qual"])
+    min_depth = int(params["min_depth"])
+    threads = int(params["threads"])
+    sample_id = str(params["sample_id"]) if params["sample_id"] is not None else None
+    output = Path(str(params["output"])) if params["output"] else None
+    if caller not in VARIANT_CALLERS:
+        message = f"caller must be one of: {', '.join(VARIANT_CALLERS)}"
+        if args.json:
+            print(_json_error_payload("invalid_caller", caller=caller, message=message))
+        else:
+            console_err.print(f"Error: {message}", style="bold red")
+        return EXIT_ARGUMENT_ERROR
+    if min_qual <= 0 or min_depth <= 0 or threads <= 0:
+        message = "min-qual, min-depth, and threads must be positive"
+        if args.json:
+            print(_json_error_payload("invalid_numeric_option", message=message))
+        else:
+            console_err.print(f"Error: {message}", style="bold red")
+        return EXIT_ARGUMENT_ERROR
+    if sample_id is not None and not sample_id.strip():
+        if args.json:
+            print(_json_error_payload("invalid_sample_id"))
+        else:
+            console_err.print("Error: sample-id must be non-empty", style="bold red")
+        return EXIT_ARGUMENT_ERROR
+    if output is not None and not output.name.endswith(".vcf.gz"):
+        message = "variant output must end with .vcf.gz"
+        if args.json:
+            print(_json_error_payload("invalid_output", message=message))
+        else:
+            console_err.print(f"Error: {message}", style="bold red")
+        return EXIT_ARGUMENT_ERROR
+
+    outdir = Path(str(params["outdir"])) if params["outdir"] else None
+    execution = build_execution_context(params, source="cli_or_config")
+    try:
+        result = run_variant_pipeline(
+            ref,
+            bam,
+            output=output,
+            outdir=outdir,
+            caller=caller,
+            min_qual=min_qual,
+            min_depth=min_depth,
+            threads=threads,
+            sample_id=sample_id,
+            resume=bool(params["resume"]),
+            execution=execution,
+            cli_mode=True,
+        )
+        if result is None:
+            metadata_path = (outdir or _default_workflow_outdir("variant", bam)) / "metadata.json"
+            _print_failure_diagnostics(metadata_path, as_json=args.json)
+            return EXIT_RUNTIME_ERROR
+        if args.json:
+            print(json.dumps({"status": "success", "execution": execution, **result}, ensure_ascii=False))
+        return EXIT_SUCCESS
+    except PreflightError as exc:
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "error": "dependency_missing",
+                        "tools": exc.missing_tools,
+                        "backend": exc.backend,
+                        "reason": exc.reason,
+                        "missing_runtime": exc.missing_runtime,
+                        "conda_env": exc.conda_env,
+                        "container_image": exc.container_image,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        return EXIT_DEPENDENCY_MISSING
+    except Exception as exc:
+        if args.json:
+            print(json.dumps({"error": "runtime_error", "message": str(exc)}, ensure_ascii=False))
+        else:
+            console_err.print(t("error_unexpected", err=str(exc)), style="bold red")
+        return EXIT_RUNTIME_ERROR
+
+
 def cmd_project(args: argparse.Namespace) -> int:
     """处理 project 子命令：项目级多样本 workflow batch。"""
     config_path = _resolve_config_path(getattr(args, "config", None))
@@ -1442,6 +1577,50 @@ def main() -> int:
     parser_longread.add_argument("--conda-env", dest="conda_env", help="Conda environment name")
     parser_longread.add_argument("--container-image", dest="container_image", help="Container image name")
 
+    # variant subcommand
+    parser_variant = subparsers.add_parser(
+        "variant",
+        help="Run variant calling from a sorted BAM (SAMtools + BCFtools)",
+    )
+    parser_variant.add_argument("--config", help="YAML config file for variant workflow")
+    parser_variant.add_argument("--ref", "-r", help="Reference genome FASTA file")
+    parser_variant.add_argument("--bam", "-b", help="Input coordinate-sorted BAM file")
+    parser_variant.add_argument(
+        "--output",
+        "-o",
+        help="Output .vcf.gz written under results/ unless absolute path is given",
+    )
+    parser_variant.add_argument(
+        "--outdir",
+        help="Run output root directory (default: BAM directory/variant_run)",
+    )
+    parser_variant.add_argument(
+        "--caller",
+        choices=list(VARIANT_CALLERS),
+        help="Variant caller (default: bcftools)",
+    )
+    parser_variant.add_argument("--min-qual", dest="min_qual", type=float, help="Minimum QUAL (default: 20)")
+    parser_variant.add_argument("--min-depth", dest="min_depth", type=int, help="Minimum sample depth (default: 1)")
+    parser_variant.add_argument("--threads", "-t", type=int, help="Number of threads (default: 1)")
+    parser_variant.add_argument("--sample-id", dest="sample_id", help="Optional sample identifier")
+    parser_variant.add_argument(
+        "--resume",
+        action="store_true",
+        default=None,
+        help="Resume from valid variant calling checkpoints",
+    )
+    parser_variant.add_argument("--profile", help="Execution profile (default: local)")
+    parser_variant.add_argument("--memory", help="Requested memory for execution metadata")
+    parser_variant.add_argument("--queue", help="Requested queue/partition for execution metadata")
+    parser_variant.add_argument("--time-limit", dest="time_limit", help="Requested walltime for execution metadata")
+    parser_variant.add_argument(
+        "--backend",
+        choices=["system", "conda", "container"],
+        help="Execution backend (default: system)",
+    )
+    parser_variant.add_argument("--conda-env", dest="conda_env", help="Conda environment name")
+    parser_variant.add_argument("--container-image", dest="container_image", help="Container image name")
+
     # report 子命令
     parser_report = subparsers.add_parser("report", help="Generate HTML run report")
     parser_report.add_argument("--input", "-i", required=True, help="Run directory or parent directory containing runs")
@@ -1497,6 +1676,8 @@ def main() -> int:
         return cmd_rnaseq(args)
     elif args.command == "longread":
         return cmd_longread(args)
+    elif args.command == "variant":
+        return cmd_variant(args)
     elif args.command == "report":
         return cmd_report(args)
     elif args.command == "project":

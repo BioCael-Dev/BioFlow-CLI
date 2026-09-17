@@ -21,6 +21,7 @@ from bioflow.longread import longread_menu
 from bioflow.report import report_menu
 from bioflow.rnaseq import rnaseq_menu
 from bioflow.search import search_menu
+from bioflow.variant import variant_menu
 
 console = Console()
 
@@ -89,6 +90,7 @@ def main_menu() -> None:
             t("menu_qc"),
             t("menu_align"),
             t("menu_longread"),
+            t("menu_variant"),
             t("menu_search"),
             t("menu_rnaseq"),
             t("menu_report"),
@@ -121,6 +123,8 @@ def main_menu() -> None:
             align_menu()
         elif answer == t("menu_longread"):
             longread_menu()
+        elif answer == t("menu_variant"):
+            variant_menu()
         elif answer == t("menu_search"):
             search_menu()
         elif answer == t("menu_rnaseq"):

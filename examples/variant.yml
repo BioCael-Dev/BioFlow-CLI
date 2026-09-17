@@ -1,0 +1,16 @@
+variant:
+  ref: ref.fa
+  bam: aligned.sorted.bam
+  outdir: runs/variant-001
+  output: sample-variant.vcf.gz
+  caller: bcftools
+  min_qual: 20
+  min_depth: 5
+  sample_id: sample-variant
+  profile: workstation
+  backend: conda
+  conda_env: bioflow-env
+  threads: 4
+  memory: 8G
+  queue: short
+  time_limit: "02:00:00"

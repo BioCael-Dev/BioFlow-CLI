@@ -30,6 +30,7 @@ from bioflow.report import (
 from bioflow.run_layout import read_metadata, utc_now_iso
 from bioflow.rnaseq import run_rnaseq_pipeline
 from bioflow.search import run_blast_search
+from bioflow.variant import run_variant_pipeline
 
 console = Console(stderr=True)
 
@@ -225,6 +226,29 @@ def _run_project_job(run_dir: Path, sample: dict[str, Any]) -> ProjectJobResult:
                     workflow,
                     run_dir,
                     str(metadata.get("failure_summary", "longread failed")),
+                )
+        elif workflow == "variant":
+            result = run_variant_pipeline(
+                Path(sample["ref"]),
+                Path(sample["bam"]),
+                output=Path(sample["output"]) if sample.get("output") else None,
+                outdir=run_dir,
+                caller=str(sample.get("caller", "bcftools")),
+                min_qual=float(sample.get("min_qual", 20.0)),
+                min_depth=int(sample.get("min_depth", 1)),
+                threads=int(sample.get("threads", 1)),
+                sample_id=sample_id,
+                resume=bool(sample.get("resume", False)),
+                execution=execution,
+                cli_mode=True,
+            )
+            if result is None:
+                metadata = _read_run_metadata(run_dir)
+                return _job_failure(
+                    sample_id,
+                    workflow,
+                    run_dir,
+                    str(metadata.get("failure_summary", "variant failed")),
                 )
         else:  # pragma: no cover
             return _job_failure(sample_id, workflow, run_dir, f"unsupported workflow: {workflow}")

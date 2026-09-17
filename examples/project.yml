@@ -63,3 +63,12 @@ project:
       output: nanopore.sorted.bam
       preset: map-ont
       threads: 8
+    - sample_id: sample-variant
+      workflow: variant
+      ref: ref.fa
+      bam: aligned.sorted.bam
+      output: sample-variant.vcf.gz
+      caller: bcftools
+      min_qual: 20
+      min_depth: 5
+      threads: 4

@@ -23,19 +23,20 @@ BioFlow-CLI 是一个基于 **MIT 许可证** 发布的 **开源项目**。
 
 - **双模式运行** — 提供交互式 TUI (`bioflow`) 和脚本友好的 CLI (`bioflow ...`)
 - **国际化支持** — 完整的中英文本地化；首次运行时选择语言，偏好保存至用户配置目录
-- **环境管理器** — 一键检测和安装常用生物工具（FastQC、SAMtools、BWA、minimap2、BLAST+、Trimmomatic、Salmon），通过 Conda 管理
+- **环境管理器** — 一键检测和安装常用生物工具（FastQC、SAMtools、BCFtools、BWA、minimap2、BLAST+、Trimmomatic、Salmon），通过 Conda 管理
 - **序列格式化** — 标准化 FASTA/FASTQ 文件，支持自定义行宽，并使用流式读写降低大文件内存占用
 - **批量处理** — 支持目录递归扫描、多进程加速、多文件处理、进度跟踪及统计表格
 - **序列比对** — 集成 BWA + SAMtools 完整流程，支持单端/双端输入、建索引、比对、排序、BAM 索引与比对统计
 - **长读长质控与比对** — 支持普通或 gzip 压缩的 FASTA/FASTQ，流式统计 read 数、总碱基数、平均读长、N50 与 FASTQ Avg Q/Q20/Q30；使用 minimap2 的 ONT、PacBio HiFi、PacBio CLR preset 生成 BAM、BAI、flagstat 和结构化 JSON 摘要
+- **变异检测** — 从参考 FASTA 与坐标排序 BAM 执行 BCFtools mpileup/call，使用 SAMtools 自动准备索引，按 QUAL/深度进行软过滤，并输出原始 BCF、压缩 VCF、Tabix 索引、BCFtools 统计和结构化变异摘要
 - **BLAST 检索** — 集成 `makeblastdb` + `blastn` 基础核酸检索流程，输出标准 tabular 结果
 - **QC 流程** — 集成 FastQC + Trimmomatic 的质量控制流水线，支持单端/双端输入
 - **RNA-seq 定量** — 集成 FastQC + Salmon mapping-based 转录本定量，支持单端/双端 reads、自动构建或复用 Salmon 索引，并输出 `quant.sf`、映射指标、lane/replicate 样本设计元数据以及项目级 counts/TPM 矩阵
 - **运行检查** — 提供 `bioflow inspect`，可汇总运行状态、关键输出、失败步骤与日志位置
 - **HTML 运行报告** — 可将单次或多次工作流运行导出为单文件 HTML 汇总报告，并提供成功率卡片、失败摘要、样本搜索/排序、workflow 指标和结构化 JSON/TSV 汇总
-- **项目批量运行** — 提供 `bioflow project`，可在一个 YAML 中混合执行 QC / 比对 / 长读长 / 检索 / RNA-seq 样本，并生成项目级汇总与 HTML 报告
+- **项目批量运行** — 提供 `bioflow project`，可在一个 YAML 中混合执行 QC / 比对 / 长读长 / 变异检测 / 检索 / RNA-seq 样本，并生成项目级汇总与 HTML 报告
 - **失败诊断** — 为失败的 workflow 提供统一 CLI 诊断输出，包括失败步骤、失败命令、stderr 摘要和日志路径
-- **YAML 工作流配置** — 可通过配置文件复用 QC / 比对 / 长读长 / 检索 / RNA-seq 参数
+- **YAML 工作流配置** — 可通过配置文件复用 QC / 比对 / 长读长 / 变异检测 / 检索 / RNA-seq 参数
 - **Workflow Manifest** — 内置 manifest 描述 workflow 输入、关键输出、支持的 profile 和配置 schema 校验规则
 - **结构化输出** — 支持 `--json` 输出，便于自动化集成和脚本调用
 - **标准退出码** — 提供统一的成功 / 参数错误 / 运行时错误 / 依赖缺失状态码
@@ -95,6 +96,7 @@ BioFlow-CLI/
 │   ├── bio_tasks.py       # 序列格式化任务逻辑
 │   ├── alignment.py       # 序列比对流程
 │   ├── longread.py        # minimap2 长读长质控与比对
+│   ├── variant.py         # SAMtools + BCFtools 变异检测
 │   ├── search.py          # BLAST 检索流程
 │   ├── rnaseq.py          # FastQC + Salmon RNA-seq 定量
 │   ├── pipeline.py        # QC 流程管理
@@ -185,6 +187,15 @@ bioflow longread --config examples/longread.yml --preset map-hifi
 # 校验输入哈希、preset、输出和执行环境后恢复长读长运行
 bioflow longread --ref ref.fa --input nanopore_reads.fastq.gz --outdir runs/longread-001 --resume
 
+# 从坐标排序 BAM 检测并过滤变异
+bioflow variant --ref ref.fa --bam aligned.sorted.bam --outdir runs/variant-001 --output sample.vcf.gz --min-qual 20 --min-depth 5 --threads 4 --sample-id sample-a
+
+# 从配置文件运行变异检测
+bioflow variant --config examples/variant.yml
+
+# 校验参考/BAM 哈希、过滤参数、输出和执行环境后恢复变异检测
+bioflow variant --ref ref.fa --bam aligned.sorted.bam --outdir runs/variant-001 --resume
+
 # 运行 BLAST 核酸检索
 bioflow search --db ref.fa --query query.fa --outdir runs/search-001 --output hits.tsv --evalue 1e-5 --max-target-seqs 20
 
@@ -243,6 +254,7 @@ bioflow env --list
 bioflow env --install fastqc
 bioflow env --install salmon
 bioflow env --install minimap2
+bioflow env --install bcftools
 
 # JSON 输出（便于自动化集成）
 bioflow --json seq --input reads.fastq
@@ -276,6 +288,7 @@ bioflow --json batch -i ./data -o ./formatted
 - `bioflow search --config search.yml`
 - `bioflow rnaseq --config rnaseq.yml`
 - `bioflow longread --config longread.yml`
+- `bioflow variant --config variant.yml`
 - `bioflow project --config project.yml`
 - 参数优先级为：CLI 显式参数 > YAML 配置 > 内置默认值
 - `qc`、`align` 与 `rnaseq` 支持二选一输入方式：`input` 或 `input_r1` + `input_r2`
@@ -284,10 +297,11 @@ bioflow --json batch -i ./data -o ./formatted
 - 使用 `group` 或 `condition` 时必须同时提供两者
 - 项目启用 RNA-seq group/condition 设计后，每个 RNA-seq 样本都必须提供这两个字段
 - `longread` 需要一个参考 FASTA 和一个 FASTA/FASTQ reads 文件；`preset` 可选 `map-ont`、`map-hifi` 或 `map-pb`
+- `variant` 需要一个参考 FASTA 和一个坐标排序 BAM；`caller` 使用 `bcftools`，`min_qual` 与 `min_depth` 用于标记 `LowQual` 软过滤记录
 - `input` 不能与 `input_r1` / `input_r2` 混用
 - workflow 与 project YAML 会在执行前按内置 workflow manifest 进行校验
 - manifest 驱动的 schema 校验可提前发现未知字段、类型错误、非正数参数和 workflow 特定必填字段缺失
-- `qc`、`align`、`longread`、`search`、`rnaseq` 配置还支持执行元数据字段：`profile`、`threads`、`memory`、`queue`、`time_limit`、`backend`、`conda_env`、`container_image`
+- `qc`、`align`、`longread`、`variant`、`search`、`rnaseq` 配置还支持执行元数据字段：`profile`、`threads`、`memory`、`queue`、`time_limit`、`backend`、`conda_env`、`container_image`
 - `project` 配置可选顶层 `project:` 段，并支持 `outdir`、`continue_on_error`、`report_title`、`profile`、`threads`、`memory`、`queue`、`time_limit`、`backend`、`conda_env`、`container_image`、`samples`
 - `samples` 中每个条目都必须包含 `sample_id`、`workflow` 以及对应 workflow 的必需字段
 - 项目级执行字段会默认继承到样本级，样本级显式配置可覆盖项目默认值
@@ -296,8 +310,8 @@ bioflow --json batch -i ./data -o ./formatted
 
 #### 工作流输出目录规范
 
-- `qc`、`align`、`longread`、`search`、`rnaseq` 统一使用标准运行目录布局
-- 可通过 `--outdir` 指定运行根目录；未指定时会在输入文件旁自动创建 `qc_run`、`align_run`、`longread_run`、`search_run` 或 `rnaseq_run`
+- `qc`、`align`、`longread`、`variant`、`search`、`rnaseq` 统一使用标准运行目录布局
+- 可通过 `--outdir` 指定运行根目录；未指定时会在输入文件旁自动创建 `qc_run`、`align_run`、`longread_run`、`variant_run`、`search_run` 或 `rnaseq_run`
 - 每次运行都会生成 `logs/`、`results/`、`tmp/` 和 `metadata.json`
 - `bioflow project` 会在项目根目录下生成按样本划分的运行目录，例如 `001-sample-qc-qc`
 - 项目级运行还会额外生成 `project_summary.json`、`summary.json`、`summary.tsv` 和 `project_report.html`
@@ -309,15 +323,17 @@ bioflow --json batch -i ./data -o ./formatted
 - 双端 `align` 会记录 `input_r1`、`input_r2`、`bam`、`bai` 以及成对比对统计
 - `rnaseq` 会记录包含 lane/replicate 的样本设计、FastQC/Salmon 步骤、`quant.sf`、Salmon 元数据、映射指标和转录本丰度摘要
 - `longread` 会把输入格式、读长/N50、FASTQ 质量指标与比对指标分开记录，并保存 minimap2 preset、BAM/BAI/flagstat、QC 摘要和综合摘要路径
+- `variant` 会记录参考/BAM 校验和、caller 与过滤参数、原始/解析命令、原始 BCF、过滤 VCF、Tabix 索引、BCFtools 统计和结构化变异指标
 - 若运行失败，诊断日志会保留在 `logs/` 目录中，便于排错
 
 #### 恢复执行与检查点
 
-- `bioflow qc --resume`、`bioflow align --resume`、`bioflow longread --resume`、`bioflow search --resume`、`bioflow rnaseq --resume` 可从最近一次有效检查点恢复执行
+- `bioflow qc --resume`、`bioflow align --resume`、`bioflow longread --resume`、`bioflow variant --resume`、`bioflow search --resume`、`bioflow rnaseq --resume` 可从最近一次有效检查点恢复执行
 - 已完成且输出有效的步骤会自动复用
 - resume 判断除了检查产物是否存在，也会校验 metadata 步骤状态和关键输出描述字段
 - resume 现在还会比较 execution 环境指纹；如果 profile、backend、环境或资源参数变化，将强制重算
 - 长读长 resume 还会比较参考文件与 reads 的哈希、minimap2 preset 和 sample id，变化时不会复用旧产物
+- 变异检测 resume 会比较参考/BAM 哈希、caller、过滤阈值、sample id、输出和执行环境，再决定是否复用各步骤
 - 缺失或损坏的中间结果会被识别并重新计算
 - TUI 模式下检测到可恢复运行目录时会给出恢复提示
 
@@ -337,7 +353,7 @@ bioflow --json batch -i ./data -o ./formatted
 
 #### 失败诊断
 
-- 失败的 `qc`、`align`、`longread`、`search`、`rnaseq` 会输出统一 CLI 诊断块
+- 失败的 `qc`、`align`、`longread`、`variant`、`search`、`rnaseq` 会输出统一 CLI 诊断块
 - 诊断块包含失败步骤、失败命令、stdout/stderr 日志路径和 stderr 摘要
 - backend 感知的预检现在还能区分缺工具、缺 conda runtime、缺 conda 环境、缺 container runtime 或缺 container image
 - 同一份诊断信息也会写入 `metadata.json` 的 `failure_details`
@@ -353,6 +369,7 @@ bioflow --json batch -i ./data -o ./formatted
 - search 报告会汇总 TSV / summary 输出、命中数和最佳命中
 - RNA-seq 报告会汇总 `quant.sf`、Salmon 元数据、映射率、映射片段数和表达转录本数
 - 长读长报告会独立汇总 BAM / BAI / flagstat、read 数、总碱基数、平均读长、N50、FASTQ 质量和比对率，不与短读长指标混用
+- 变异检测报告会汇总原始 BCF、过滤及索引后的 VCF、BCFtools 统计、变异总数、PASS 数和 SNP/INDEL 数
 - 项目级 RNA-seq 报告还会展示样本设计分组、counts/TPM 矩阵入口、样本元数据以及失败或缺失定量结果提示
 - TUI 主菜单也已提供报告导出入口
 
@@ -380,7 +397,7 @@ pip install -e .[dev]
 
 ## 项目状态
 
-当前开发版本：**v1.0.2**
+当前开发版本：**v1.1.0**
 
 ## 许可证
 

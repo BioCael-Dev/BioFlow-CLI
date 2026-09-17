@@ -19,6 +19,10 @@ def test_preflight_registry_includes_minimap2() -> None:
     assert preflight.TOOL_REGISTRY["minimap2"][0] == "minimap2"
 
 
+def test_preflight_registry_includes_bcftools() -> None:
+    assert preflight.TOOL_REGISTRY["bcftools"][0] == "bcftools"
+
+
 def test_preflight_check_conda_backend_requires_runtime(monkeypatch) -> None:
     monkeypatch.setattr(preflight, "check_tool", lambda _name: True)
     monkeypatch.setattr(preflight, "_check_conda", lambda: False)

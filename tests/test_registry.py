@@ -8,7 +8,7 @@ def test_builtin_workflow_manifests_cover_existing_workflows() -> None:
     manifests = list_workflow_manifests()
     workflow_ids = [manifest.workflow_id for manifest in manifests]
 
-    assert workflow_ids == ["align", "longread", "qc", "rnaseq", "search"]
+    assert workflow_ids == ["align", "longread", "qc", "rnaseq", "search", "variant"]
     assert get_workflow_manifest("qc").display_name == "Quality Control"
     assert "paired-end" in get_workflow_manifest("align").supported_inputs
     assert "hpc-slurm" in get_workflow_manifest("search").supported_profiles
@@ -16,6 +16,7 @@ def test_builtin_workflow_manifests_cover_existing_workflows() -> None:
     assert "quant_sf" in get_workflow_manifest("rnaseq").key_outputs
     assert "long-read-fastq" in get_workflow_manifest("longread").supported_inputs
     assert "qc_summary" in get_workflow_manifest("longread").key_outputs
+    assert "vcf" in get_workflow_manifest("variant").key_outputs
 
 
 def test_manifest_exposes_config_schema_fields() -> None:
@@ -23,6 +24,7 @@ def test_manifest_exposes_config_schema_fields() -> None:
     search = get_workflow_manifest("search")
     rnaseq = get_workflow_manifest("rnaseq")
     longread = get_workflow_manifest("longread")
+    variant = get_workflow_manifest("variant")
 
     assert "input_r1" in align.allowed_keys
     assert align.project_fields["ref"].required_for_project is True
@@ -33,11 +35,13 @@ def test_manifest_exposes_config_schema_fields() -> None:
     assert longread.project_fields["ref"].required_for_project is True
     assert longread.project_fields["input"].required_for_project is True
     assert longread.fields["threads"].positive is True
+    assert variant.project_fields["bam"].required_for_project is True
+    assert variant.fields["min_qual"].kind == "number"
 
 
 def test_checked_in_examples_match_manifest_schemas() -> None:
     examples_dir = Path(__file__).parents[1] / "examples"
-    for workflow in ("qc", "align", "search", "rnaseq", "longread"):
+    for workflow in ("qc", "align", "search", "rnaseq", "longread", "variant"):
         config = load_workflow_config(examples_dir / f"{workflow}.yml", workflow)
         assert config
 
@@ -49,4 +53,5 @@ def test_checked_in_examples_match_manifest_schemas() -> None:
         "rnaseq",
         "rnaseq",
         "longread",
+        "variant",
     ]

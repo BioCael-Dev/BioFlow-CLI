@@ -31,6 +31,7 @@ BIO_TOOLS: list[tuple[str, str, list[str]]] = [
     ("Trimmomatic", "trimmomatic", ["conda", "install", "-y", "-c", "bioconda", "trimmomatic"]),
     ("Salmon", "salmon", ["conda", "install", "-y", "-c", "bioconda", "salmon"]),
     ("minimap2", "minimap2", ["conda", "install", "-y", "-c", "bioconda", "minimap2"]),
+    ("BCFtools", "bcftools", ["conda", "install", "-y", "-c", "bioconda", "bcftools"]),
 ]
 
 

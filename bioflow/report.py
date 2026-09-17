@@ -457,6 +457,22 @@ def _metric_payload(run: RunInfo) -> dict[str, Any]:
                 metrics[key] = run.stats[key]
             elif key in run.summary:
                 metrics[key] = run.summary[key]
+    elif run.workflow == "variant":
+        for key in (
+            "total_variants",
+            "pass_variants",
+            "filtered_variants",
+            "snp_count",
+            "indel_count",
+            "mnp_count",
+            "other_variant_count",
+            "multiallelic_count",
+            "mean_quality",
+        ):
+            if key in run.stats:
+                metrics[key] = run.stats[key]
+            elif key in run.summary:
+                metrics[key] = run.summary[key]
 
     for key, value in run.stats.items():
         metrics.setdefault(key, value)
@@ -474,6 +490,7 @@ def _key_metric(run: RunInfo, metrics: dict[str, Any]) -> tuple[str, Any]:
         "search": ("hit_count", "best_hit", "best_bitscore"),
         "rnaseq": ("mapping_rate", "mapped_fragments", "expressed_transcripts"),
         "longread": ("n50", "mapping_rate", "read_count"),
+        "variant": ("pass_variants", "total_variants", "snp_count"),
     }
     for key in preferred_by_workflow.get(run.workflow, ()):
         if key in metrics:
@@ -640,6 +657,19 @@ def _core_outputs(run: RunInfo) -> dict[str, Any]:
                 core[key] = run.summary[key]
         return core
 
+    if run.workflow == "variant":
+        core = {
+            key: outputs[key]
+            for key in ("bcf", "vcf", "vcf_index", "bcftools_stats", "summary")
+            if key in outputs
+        }
+        for key in ("total_variants", "pass_variants", "snp_count", "indel_count"):
+            if key in run.stats:
+                core[key] = run.stats[key]
+            elif key in run.summary:
+                core[key] = run.summary[key]
+        return core
+
     return outputs
 
 
@@ -724,6 +754,35 @@ def _workflow_metric_rows(workflow: str, runs: list[RunInfo]) -> dict[str, Any]:
             metrics[t("report_metric_longread_avg_n50")] = sum(n50_values) / len(n50_values)
         if rates:
             metrics[t("report_metric_longread_mapping_rate")] = sum(rates) / len(rates)
+    elif workflow == "variant":
+        total = [
+            int(run.stats["total_variants"])
+            for run in successful
+            if isinstance(run.stats.get("total_variants"), int)
+        ]
+        passed = [
+            int(run.stats["pass_variants"])
+            for run in successful
+            if isinstance(run.stats.get("pass_variants"), int)
+        ]
+        snps = [
+            int(run.stats["snp_count"])
+            for run in successful
+            if isinstance(run.stats.get("snp_count"), int)
+        ]
+        indels = [
+            int(run.stats["indel_count"])
+            for run in successful
+            if isinstance(run.stats.get("indel_count"), int)
+        ]
+        if total:
+            metrics[t("report_metric_variant_total")] = sum(total)
+        if passed:
+            metrics[t("report_metric_variant_pass")] = sum(passed)
+        if snps:
+            metrics[t("report_metric_variant_snp")] = sum(snps)
+        if indels:
+            metrics[t("report_metric_variant_indel")] = sum(indels)
 
     return metrics
 

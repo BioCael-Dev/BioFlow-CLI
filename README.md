@@ -21,7 +21,7 @@ License text: [MIT License](LICENSE)
 
 - **Dual Mode**: Interactive TUI (`bioflow`) and script-friendly CLI (`bioflow ...`)
 - **i18n**: Full English/Chinese localization with persisted language preference
-- **Environment Manager**: Detect/install FastQC, SAMtools, BWA, minimap2, BLAST+, Trimmomatic, and Salmon via Conda
+- **Environment Manager**: Detect/install FastQC, SAMtools, BCFtools, BWA, minimap2, BLAST+, Trimmomatic, and Salmon via Conda
 - **Sequence Formatting**:
   - FASTA formatting with configurable line width
   - FASTQ formatting with auto-detection and quality summary (Avg Q / Q20 / Q30)
@@ -35,6 +35,11 @@ License text: [MIT License](LICENSE)
   - FASTQ quality summaries (Avg Q / Q20 / Q30), including gzip-compressed input support
   - minimap2 presets for Oxford Nanopore (`map-ont`), PacBio HiFi (`map-hifi`), and PacBio CLR (`map-pb`)
   - Sorted/indexed BAM, flagstat, QC JSON, and combined long-read summary JSON outputs
+- **Variant Calling**:
+  - BCFtools mpileup/call workflow from a reference FASTA and coordinate-sorted BAM
+  - Automatic FASTA and BAM indexing with SAMtools
+  - Configurable QUAL/depth soft filtering with raw BCF, compressed VCF, Tabix index, BCFtools statistics, and structured summary outputs
+  - Record-level total, PASS, filtered, SNP, INDEL, MNP, multiallelic, and mean-QUAL metrics
 - **BLAST Search**:
   - `makeblastdb` + `blastn` nucleotide search workflow
   - Tabular result output (`outfmt 6`) for downstream analysis
@@ -46,9 +51,9 @@ License text: [MIT License](LICENSE)
   - Project-level counts/TPM matrices and a sample metadata table for downstream R/Python analysis
 - **Run Inspection**: `bioflow inspect` summarizes run status, critical outputs, failed steps, and log locations
 - **HTML Run Reports**: Export one or more workflow runs into a portable single-file HTML summary with success-rate cards, failure summaries, sample search/sort, workflow metrics, and structured JSON/TSV summaries
-- **Project Batch**: `bioflow project` executes mixed QC / alignment / long-read / search / RNA-seq samples from one YAML file and emits project summaries plus a combined HTML report
+- **Project Batch**: `bioflow project` executes mixed QC / alignment / long-read / variant / search / RNA-seq samples from one YAML file and emits project summaries plus a combined HTML report
 - **Failure Diagnostics**: Unified failure output across workflows with failed step, failed command, stderr tail, and direct log paths
-- **YAML Workflow Config**: run QC / alignment / long-read / search / RNA-seq from reusable config files
+- **YAML Workflow Config**: run QC / alignment / long-read / variant / search / RNA-seq from reusable config files
 - **Workflow Manifest**: built-in manifests describe workflow inputs, key outputs, supported profiles, and config schema validation
 - **Structured Output**: `--json` output for automation pipelines
 - **Stable Exit Codes**: standardized success/error/dependency signaling
@@ -146,6 +151,15 @@ bioflow longread --config examples/longread.yml --preset map-hifi
 # Resume a long-read run after validating input hashes, preset, outputs, and execution environment
 bioflow longread --ref ref.fa --input nanopore_reads.fastq.gz --outdir runs/longread-001 --resume
 
+# Call and filter variants from a coordinate-sorted BAM
+bioflow variant --ref ref.fa --bam aligned.sorted.bam --outdir runs/variant-001 --output sample.vcf.gz --min-qual 20 --min-depth 5 --threads 4 --sample-id sample-a
+
+# Run variant calling from config
+bioflow variant --config examples/variant.yml
+
+# Resume variant calling after validating reference/BAM hashes, filters, outputs, and execution environment
+bioflow variant --ref ref.fa --bam aligned.sorted.bam --outdir runs/variant-001 --resume
+
 # Run BLAST nucleotide search
 bioflow search --db ref.fa --query query.fa --outdir runs/search-001 --output hits.tsv --evalue 1e-5 --max-target-seqs 20
 
@@ -204,6 +218,7 @@ bioflow env --list
 bioflow env --install fastqc
 bioflow env --install salmon
 bioflow env --install minimap2
+bioflow env --install bcftools
 
 # JSON output for automation
 bioflow --json seq --input reads.fastq
@@ -239,6 +254,7 @@ bioflow --json batch -i ./data -o ./formatted
 - `bioflow search --config search.yml`
 - `bioflow rnaseq --config rnaseq.yml`
 - `bioflow longread --config longread.yml`
+- `bioflow variant --config variant.yml`
 - `bioflow project --config project.yml`
 - parameter precedence is: explicit CLI argument > YAML config > built-in default
 - `qc`, `align`, and `rnaseq` support either `input` or the `input_r1` + `input_r2` pair
@@ -247,10 +263,11 @@ bioflow --json batch -i ./data -o ./formatted
 - `group` and `condition` must be provided together when either is used
 - when a project uses RNA-seq group/condition design, every RNA-seq sample must provide both fields
 - `longread` requires one reference FASTA and one FASTA/FASTQ reads file; `preset` accepts `map-ont`, `map-hifi`, or `map-pb`
+- `variant` requires one reference FASTA and one coordinate-sorted BAM; `caller` is `bcftools`, while `min_qual` and `min_depth` define the `LowQual` soft-filter thresholds
 - `input` cannot be combined with `input_r1` / `input_r2`
 - workflow and project YAML files are validated against built-in workflow manifests before execution
 - manifest-based schema checks catch unknown fields, invalid types, non-positive numeric values, and workflow-specific missing fields early
-- `qc`, `align`, `longread`, `search`, and `rnaseq` configs also support execution metadata fields: `profile`, `threads`, `memory`, `queue`, `time_limit`, `backend`, `conda_env`, and `container_image`
+- `qc`, `align`, `longread`, `variant`, `search`, and `rnaseq` configs also support execution metadata fields: `profile`, `threads`, `memory`, `queue`, `time_limit`, `backend`, `conda_env`, and `container_image`
 - `project` config uses a top-level `project:` section optionally, and supports `outdir`, `continue_on_error`, `report_title`, `profile`, `threads`, `memory`, `queue`, `time_limit`, `backend`, `conda_env`, `container_image`, and `samples`
 - each `samples` item requires `sample_id`, `workflow`, and that workflow's normal required fields
 - project-level execution fields are inherited by samples unless a sample overrides them
@@ -259,8 +276,8 @@ bioflow --json batch -i ./data -o ./formatted
 
 ### Workflow Output Layout
 
-- `qc`, `align`, `longread`, `search`, and `rnaseq` share a standard run directory layout
-- set `--outdir` to control the run root; if omitted, BioFlow-CLI creates `qc_run`, `align_run`, `longread_run`, `search_run`, or `rnaseq_run` beside the input file
+- `qc`, `align`, `longread`, `variant`, `search`, and `rnaseq` share a standard run directory layout
+- set `--outdir` to control the run root; if omitted, BioFlow-CLI creates `qc_run`, `align_run`, `longread_run`, `variant_run`, `search_run`, or `rnaseq_run` beside the input file
 - each run contains `logs/`, `results/`, `tmp/`, and `metadata.json`
 - `bioflow project` creates one project root with per-sample run directories such as `001-sample-qc-qc`
 - each project run also writes `project_summary.json`, `summary.json`, `summary.tsv`, and `project_report.html`
@@ -272,15 +289,17 @@ bioflow --json batch -i ./data -o ./formatted
 - paired-end `align` metadata records `input_r1`, `input_r2`, `bam`, `bai`, and paired flagstat metrics
 - `rnaseq` metadata records sample design fields (including lane/replicate), FastQC/Salmon steps, `quant.sf`, Salmon meta information, mapping metrics, and transcript abundance summaries
 - `longread` metadata records input format, length/N50 and FASTQ quality metrics separately from alignment metrics, plus minimap2 preset, BAM/BAI/flagstat, QC summary, and combined summary paths
+- `variant` metadata records reference/BAM checksums, caller and filter settings, raw/resolved commands, raw BCF, filtered VCF, Tabix index, BCFtools stats, and structured variant metrics
 - on failure, diagnostic stdout/stderr logs are retained under `logs/`
 
 ### Resume And Checkpoints
 
-- `bioflow qc --resume`, `bioflow align --resume`, `bioflow longread --resume`, `bioflow search --resume`, and `bioflow rnaseq --resume` resume from the latest valid workflow checkpoint
+- `bioflow qc --resume`, `bioflow align --resume`, `bioflow longread --resume`, `bioflow variant --resume`, `bioflow search --resume`, and `bioflow rnaseq --resume` resume from the latest valid workflow checkpoint
 - completed steps are reused automatically when their key outputs remain valid
 - resume validation also checks metadata step status and required output descriptors before reusing a checkpoint
 - resume also compares the execution fingerprint; changing profile, backend, environment, or requested resources forces recomputation
 - long-read resume additionally compares reference/read hashes, minimap2 preset, and sample id before reusing outputs
+- variant resume compares reference/BAM hashes, caller, filtering thresholds, sample id, outputs, and execution environment before reusing each step
 - incomplete or corrupted intermediate outputs are detected and recomputed
 - TUI mode now prompts when an existing run directory contains resumable metadata
 
@@ -300,7 +319,7 @@ bioflow --json batch -i ./data -o ./formatted
 
 ### Failure Diagnostics
 
-- failed `qc`, `align`, `longread`, `search`, and `rnaseq` runs print a unified CLI diagnostic block
+- failed `qc`, `align`, `longread`, `variant`, `search`, and `rnaseq` runs print a unified CLI diagnostic block
 - the block includes failed step, failed command, stdout log path, stderr log path, and stderr tail
 - backend-aware preflight now distinguishes missing tools from missing conda runtime, missing conda env, or missing container runtime/image
 - the same diagnostics are persisted in `metadata.json` under `failure_details`
@@ -316,6 +335,7 @@ bioflow --json batch -i ./data -o ./formatted
 - search reports summarize TSV / summary outputs, hit count, and best hit
 - RNA-seq reports summarize `quant.sf`, Salmon metadata, mapping rate, mapped fragments, and expressed transcripts
 - long-read reports summarize BAM / BAI / flagstat, read count, total bases, mean length, N50, FASTQ quality, and mapping rate independently from short-read alignment metrics
+- variant reports summarize raw BCF, filtered/indexed VCF, BCFtools statistics, total/PASS records, and SNP/INDEL counts
 - project RNA-seq reports also show sample-design groups, counts/TPM matrix links, sample metadata, and failed or missing quantification warnings
 - TUI mode also exposes report export from the main menu
 
@@ -343,7 +363,7 @@ pip install -e .[dev]
 
 ## Project Status
 
-Current development version: **v1.0.2**
+Current development version: **v1.1.0**
 
 Release history and notes: [GitHub Releases](https://github.com/BioCael-Dev/BioFlow-CLI/releases)
 
