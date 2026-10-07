@@ -72,3 +72,12 @@ project:
       min_qual: 20
       min_depth: 5
       threads: 4
+    - sample_id: sample-variant-replicate
+      workflow: variant
+      ref: ref.fa
+      bam: aligned-replicate.sorted.bam
+      output: sample-variant-replicate.vcf.gz
+      caller: bcftools
+      min_qual: 20
+      min_depth: 5
+      threads: 4

@@ -40,6 +40,7 @@ License text: [MIT License](LICENSE)
   - Automatic FASTA and BAM indexing with SAMtools
   - Configurable QUAL/depth soft filtering with raw BCF, compressed VCF, Tabix index, BCFtools statistics, and structured summary outputs
   - Record-level total, PASS, filtered, SNP, INDEL, MNP, multiallelic, and mean-QUAL metrics
+  - Project-level JSON/TSV comparison exports, aggregate counts, result diagnostics, and merge-ready reference metadata
 - **BLAST Search**:
   - `makeblastdb` + `blastn` nucleotide search workflow
   - Tabular result output (`outfmt 6`) for downstream analysis
@@ -51,7 +52,7 @@ License text: [MIT License](LICENSE)
   - Project-level counts/TPM matrices and a sample metadata table for downstream R/Python analysis
 - **Run Inspection**: `bioflow inspect` summarizes run status, critical outputs, failed steps, and log locations
 - **HTML Run Reports**: Export one or more workflow runs into a portable single-file HTML summary with success-rate cards, failure summaries, sample search/sort, workflow metrics, and structured JSON/TSV summaries
-- **Project Batch**: `bioflow project` executes mixed QC / alignment / long-read / variant / search / RNA-seq samples from one YAML file and emits project summaries plus a combined HTML report
+- **Project Batch**: `bioflow project` executes mixed QC / alignment / long-read / variant / search / RNA-seq samples from one YAML file and emits project summaries, workflow-specific exports, and a combined HTML report
 - **Failure Diagnostics**: Unified failure output across workflows with failed step, failed command, stderr tail, and direct log paths
 - **YAML Workflow Config**: run QC / alignment / long-read / variant / search / RNA-seq from reusable config files
 - **Workflow Manifest**: built-in manifests describe workflow inputs, key outputs, supported profiles, and config schema validation
@@ -282,6 +283,9 @@ bioflow --json batch -i ./data -o ./formatted
 - `bioflow project` creates one project root with per-sample run directories such as `001-sample-qc-qc`
 - each project run also writes `project_summary.json`, `summary.json`, `summary.tsv`, and `project_report.html`
 - projects containing RNA-seq samples additionally write `counts_matrix.tsv` (Salmon `NumReads`), `tpm_matrix.tsv` (Salmon `TPM`), and `sample_metadata.tsv`; matrices include successful parseable Salmon runs while metadata retains failed, missing, and not-run samples
+- projects containing variant samples additionally write `variant_summary.json` and `variant_summary.tsv` with stable per-sample metrics, project-level counts, failed/missing/not-run diagnostics, reference-consistency groups, and merge-ready VCF/index metadata
+- `variant_summary.json` uses schema `bioflow.variant-summary.v1`; its sample records and TSV projection keep stable columns for sample/status, reference hash, caller/filters, VCF/index, variant classes, mean QUAL, merge candidacy, and diagnostics
+- `project_summary.json` exposes the same data under `variant`, including `project_counts`, per-sample records, and the cohort `reference_groups` / `merge_inputs` contract
 - metadata now records `metadata_schema_version`, input file size / mtime / sha256, runtime environment, tool versions, and failure summary
 - metadata now also writes an `execution` block with `profile`, `backend`, `conda_env`, `container_image`, requested resources, and parameter source
 - each workflow step now records its backend, raw command, resolved command, and environment fingerprint
@@ -337,6 +341,7 @@ bioflow --json batch -i ./data -o ./formatted
 - long-read reports summarize BAM / BAI / flagstat, read count, total bases, mean length, N50, FASTQ quality, and mapping rate independently from short-read alignment metrics
 - variant reports summarize raw BCF, filtered/indexed VCF, BCFtools statistics, total/PASS records, and SNP/INDEL counts
 - project RNA-seq reports also show sample-design groups, counts/TPM matrix links, sample metadata, and failed or missing quantification warnings
+- project variant reports add aggregate counts, a searchable per-sample PASS/filtered/SNP/INDEL/MNP comparison table, summary export links, result diagnostics, and cohort reference-consistency status
 - TUI mode also exposes report export from the main menu
 
 ### Batch Concurrency
@@ -363,7 +368,7 @@ pip install -e .[dev]
 
 ## Project Status
 
-Current development version: **v1.1.0**
+Current development version: **v1.1.1**
 
 Release history and notes: [GitHub Releases](https://github.com/BioCael-Dev/BioFlow-CLI/releases)
 

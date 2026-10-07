@@ -28,13 +28,13 @@ BioFlow-CLI 是一个基于 **MIT 许可证** 发布的 **开源项目**。
 - **批量处理** — 支持目录递归扫描、多进程加速、多文件处理、进度跟踪及统计表格
 - **序列比对** — 集成 BWA + SAMtools 完整流程，支持单端/双端输入、建索引、比对、排序、BAM 索引与比对统计
 - **长读长质控与比对** — 支持普通或 gzip 压缩的 FASTA/FASTQ，流式统计 read 数、总碱基数、平均读长、N50 与 FASTQ Avg Q/Q20/Q30；使用 minimap2 的 ONT、PacBio HiFi、PacBio CLR preset 生成 BAM、BAI、flagstat 和结构化 JSON 摘要
-- **变异检测** — 从参考 FASTA 与坐标排序 BAM 执行 BCFtools mpileup/call，使用 SAMtools 自动准备索引，按 QUAL/深度进行软过滤，并输出原始 BCF、压缩 VCF、Tabix 索引、BCFtools 统计和结构化变异摘要
+- **变异检测** — 从参考 FASTA 与坐标排序 BAM 执行 BCFtools mpileup/call，使用 SAMtools 自动准备索引，按 QUAL/深度进行软过滤，并输出原始 BCF、压缩 VCF、Tabix 索引、BCFtools 统计、结构化变异摘要以及项目级 JSON/TSV 样本比较结果
 - **BLAST 检索** — 集成 `makeblastdb` + `blastn` 基础核酸检索流程，输出标准 tabular 结果
 - **QC 流程** — 集成 FastQC + Trimmomatic 的质量控制流水线，支持单端/双端输入
 - **RNA-seq 定量** — 集成 FastQC + Salmon mapping-based 转录本定量，支持单端/双端 reads、自动构建或复用 Salmon 索引，并输出 `quant.sf`、映射指标、lane/replicate 样本设计元数据以及项目级 counts/TPM 矩阵
 - **运行检查** — 提供 `bioflow inspect`，可汇总运行状态、关键输出、失败步骤与日志位置
 - **HTML 运行报告** — 可将单次或多次工作流运行导出为单文件 HTML 汇总报告，并提供成功率卡片、失败摘要、样本搜索/排序、workflow 指标和结构化 JSON/TSV 汇总
-- **项目批量运行** — 提供 `bioflow project`，可在一个 YAML 中混合执行 QC / 比对 / 长读长 / 变异检测 / 检索 / RNA-seq 样本，并生成项目级汇总与 HTML 报告
+- **项目批量运行** — 提供 `bioflow project`，可在一个 YAML 中混合执行 QC / 比对 / 长读长 / 变异检测 / 检索 / RNA-seq 样本，并生成项目级汇总、workflow 专属导出与 HTML 报告
 - **失败诊断** — 为失败的 workflow 提供统一 CLI 诊断输出，包括失败步骤、失败命令、stderr 摘要和日志路径
 - **YAML 工作流配置** — 可通过配置文件复用 QC / 比对 / 长读长 / 变异检测 / 检索 / RNA-seq 参数
 - **Workflow Manifest** — 内置 manifest 描述 workflow 输入、关键输出、支持的 profile 和配置 schema 校验规则
@@ -316,6 +316,9 @@ bioflow --json batch -i ./data -o ./formatted
 - `bioflow project` 会在项目根目录下生成按样本划分的运行目录，例如 `001-sample-qc-qc`
 - 项目级运行还会额外生成 `project_summary.json`、`summary.json`、`summary.tsv` 和 `project_report.html`
 - 包含 RNA-seq 样本的项目还会输出 `counts_matrix.tsv`（Salmon `NumReads`）、`tpm_matrix.tsv`（Salmon `TPM`）和 `sample_metadata.tsv`；矩阵只纳入成功且可解析的 Salmon 运行，元数据表保留失败、缺失结果和未运行样本
+- 包含变异样本的项目还会输出 `variant_summary.json` 和 `variant_summary.tsv`，记录稳定的样本级指标、项目分类总计、失败/缺失/未运行诊断、参考基因组一致性分组以及可用于后续合并的 VCF/索引元数据
+- `variant_summary.json` 使用 `bioflow.variant-summary.v1` schema；样本记录及对应 TSV 会稳定保留样本/状态、参考哈希、caller/过滤参数、VCF/索引、变异分类、平均 QUAL、合并候选状态和诊断字段
+- `project_summary.json` 会在 `variant` 区块公开同一份数据，并提供 `project_counts`、样本记录及队列级 `reference_groups` / `merge_inputs` 契约
 - `metadata.json` 现在额外记录 `metadata_schema_version`、输入文件大小 / 修改时间 / sha256、运行环境、工具版本和失败摘要
 - `metadata.json` 现在还会写入统一的 `execution` 区块，记录 `profile`、`backend`、`conda_env`、`container_image`、资源请求参数和参数来源
 - 每个 workflow step 现在还会记录 backend、原始命令、最终解析命令和环境指纹
@@ -371,6 +374,7 @@ bioflow --json batch -i ./data -o ./formatted
 - 长读长报告会独立汇总 BAM / BAI / flagstat、read 数、总碱基数、平均读长、N50、FASTQ 质量和比对率，不与短读长指标混用
 - 变异检测报告会汇总原始 BCF、过滤及索引后的 VCF、BCFtools 统计、变异总数、PASS 数和 SNP/INDEL 数
 - 项目级 RNA-seq 报告还会展示样本设计分组、counts/TPM 矩阵入口、样本元数据以及失败或缺失定量结果提示
+- 项目级变异报告还会展示分类总计、可搜索的样本 PASS/filtered/SNP/INDEL/MNP 对比表、摘要导出入口、结果诊断和队列参考基因组一致性状态
 - TUI 主菜单也已提供报告导出入口
 
 #### 批量并发
@@ -397,7 +401,7 @@ pip install -e .[dev]
 
 ## 项目状态
 
-当前开发版本：**v1.1.0**
+当前开发版本：**v1.1.1**
 
 ## 许可证
 

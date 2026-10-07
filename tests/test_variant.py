@@ -69,6 +69,58 @@ def _install_fake_variant_tools(monkeypatch, calls: list[str]) -> None:
     monkeypatch.setattr(variant, "collect_tool_versions", lambda _tools: {"samtools": "1.22", "bcftools": "1.22"})
 
 
+def _write_variant_project_result(
+    project_root: Path,
+    *,
+    sample_id: str,
+    reference_sha256: str,
+    stats: dict[str, object],
+    include_index: bool = True,
+) -> project_batch.ProjectJobResult:
+    run_dir = project_root / f"{sample_id}-variant"
+    results_dir = run_dir / "results"
+    results_dir.mkdir(parents=True)
+    vcf_path = results_dir / f"{sample_id}.vcf.gz"
+    index_path = Path(f"{vcf_path}.tbi")
+    vcf_path.write_bytes(b"vcf")
+    if include_index:
+        index_path.write_bytes(b"index")
+    outputs = {
+        "vcf": str(vcf_path),
+        "vcf_index": str(index_path),
+        "summary": str(results_dir / "variant_summary.json"),
+    }
+    (run_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "workflow": "variant",
+                "version": "1.1.1",
+                "status": "success",
+                "started_at": "2026-10-07T00:00:00Z",
+                "parameters": {
+                    "sample_id": sample_id,
+                    "caller": "bcftools",
+                    "min_qual": 20.0,
+                    "min_depth": 5,
+                },
+                "inputs": {"ref": "/data/ref.fa", "bam": f"/data/{sample_id}.bam"},
+                "input_details": {"ref": {"sha256": reference_sha256}},
+                "outputs": outputs,
+                "stats": stats,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return project_batch.ProjectJobResult(
+        sample_id=sample_id,
+        workflow="variant",
+        run_dir=run_dir,
+        metadata_path=run_dir / "metadata.json",
+        status="success",
+        outputs=outputs,
+    )
+
+
 def test_summarize_vcf_counts_record_types_and_filters(tmp_path: Path) -> None:
     vcf_path = tmp_path / "calls.vcf.gz"
     _write_vcf_gz(vcf_path)
@@ -445,7 +497,7 @@ def test_variant_report_exports_metrics_and_outputs(tmp_path: Path) -> None:
         json.dumps(
             {
                 "workflow": "variant",
-                "version": "1.1.0",
+                "version": "1.1.1",
                 "status": "success",
                 "started_at": "2026-09-17T00:00:00Z",
                 "parameters": {"sample_id": "sample-a"},
@@ -475,6 +527,285 @@ def test_variant_report_exports_metrics_and_outputs(tmp_path: Path) -> None:
     assert "VARIANT" in html
     assert "PASS Variants" in html
     assert "sample-a.vcf.gz" in html
+
+
+def test_variant_project_exports_stable_comparison_and_merge_metadata(tmp_path: Path) -> None:
+    project_root = tmp_path / "variant-project"
+    project_root.mkdir()
+    stats_a = {
+        "total_variants": 12,
+        "pass_variants": 10,
+        "filtered_variants": 2,
+        "snp_count": 8,
+        "indel_count": 3,
+        "mnp_count": 1,
+        "other_variant_count": 0,
+        "multiallelic_count": 1,
+        "mean_quality": 42.5,
+    }
+    stats_b = {
+        "total_variants": 7,
+        "pass_variants": 6,
+        "filtered_variants": 1,
+        "snp_count": 5,
+        "indel_count": 2,
+        "mnp_count": 0,
+        "other_variant_count": 0,
+        "multiallelic_count": 0,
+        "mean_quality": 38.0,
+    }
+    results = [
+        _write_variant_project_result(
+            project_root,
+            sample_id="sample-a",
+            reference_sha256="shared-reference",
+            stats=stats_a,
+        ),
+        _write_variant_project_result(
+            project_root,
+            sample_id="sample-b",
+            reference_sha256="shared-reference",
+            stats=stats_b,
+        ),
+    ]
+    planned_samples = [
+        {"sample_id": "sample-a", "workflow": "variant", "ref": "/data/ref.fa"},
+        {"sample_id": "sample-b", "workflow": "variant", "ref": "/data/ref.fa"},
+    ]
+
+    exported = project_batch._write_variant_project_exports(
+        project_root,
+        planned_samples=planned_samples,
+        results=results,
+    )
+
+    assert exported["schema_version"] == "bioflow.variant-summary.v1"
+    assert exported["planned_sample_count"] == 2
+    assert exported["comparison_sample_count"] == 2
+    assert exported["project_counts"]["total_variants"] == 19
+    assert exported["project_counts"]["pass_variants"] == 16
+    assert exported["project_counts"]["mnp_count"] == 1
+    assert exported["cohort"]["reference_consistent"] is True
+    assert exported["cohort"]["merge_ready"] is True
+    assert [item["sample_id"] for item in exported["cohort"]["merge_inputs"]] == [
+        "sample-a",
+        "sample-b",
+    ]
+
+    saved = json.loads(Path(exported["variant_summary_json"]).read_text(encoding="utf-8"))
+    assert saved["samples"][0]["snp_count"] == 8
+    tsv_lines = Path(exported["variant_summary_tsv"]).read_text(encoding="utf-8").splitlines()
+    assert tsv_lines[0].split("\t") == list(project_batch.VARIANT_SUMMARY_COLUMNS)
+    assert "sample-a\tsuccess\tready" in tsv_lines[1]
+    assert "\ttrue\t" in tsv_lines[1]
+
+    (project_root / "project_summary.json").write_text(
+        json.dumps({"project_root": str(project_root), "variant": exported}),
+        encoding="utf-8",
+    )
+    html_path = generate_report(project_root, project_root / "project_report.html")
+    html = html_path.read_text(encoding="utf-8")
+    assert "Variant Project Summary" in html
+    assert "Sample Variant Comparison" in html
+    assert "sample-a" in html
+    assert "sample-b" in html
+    assert "variant_summary.tsv" in html
+    assert "sample-a-variant/results/sample-a.vcf.gz" in html
+    assert "data-variant-search" in html
+    assert 'data-search="sample-a ready success' in html
+
+
+def test_variant_project_exports_diagnostics_and_reference_mismatch(tmp_path: Path) -> None:
+    project_root = tmp_path / "variant-project"
+    project_root.mkdir()
+    complete_stats = {
+        "total_variants": 4,
+        "pass_variants": 3,
+        "filtered_variants": 1,
+        "snp_count": 2,
+        "indel_count": 1,
+        "mnp_count": 1,
+        "other_variant_count": 0,
+        "multiallelic_count": 0,
+        "mean_quality": 30.0,
+    }
+    result_a = _write_variant_project_result(
+        project_root,
+        sample_id="sample-a",
+        reference_sha256="reference-a",
+        stats=complete_stats,
+    )
+    result_b = _write_variant_project_result(
+        project_root,
+        sample_id="sample-b",
+        reference_sha256="reference-b",
+        stats=complete_stats,
+    )
+    result_missing = _write_variant_project_result(
+        project_root,
+        sample_id="sample-missing",
+        reference_sha256="reference-a",
+        stats=complete_stats,
+        include_index=False,
+    )
+    result_no_reference = _write_variant_project_result(
+        project_root,
+        sample_id="sample-no-reference",
+        reference_sha256="",
+        stats=complete_stats,
+    )
+    failed_run = project_root / "sample-failed-variant"
+    failed_run.mkdir()
+    failed = project_batch.ProjectJobResult(
+        sample_id="sample-failed",
+        workflow="variant",
+        run_dir=failed_run,
+        metadata_path=failed_run / "metadata.json",
+        status="failed",
+        outputs={},
+        error="variant call failed",
+    )
+    planned_samples = [
+        {"sample_id": sample_id, "workflow": "variant", "ref": "/data/ref.fa"}
+        for sample_id in (
+            "sample-a",
+            "sample-b",
+            "sample-missing",
+            "sample-no-reference",
+            "sample-failed",
+            "sample-not-run",
+        )
+    ]
+
+    exported = project_batch._write_variant_project_exports(
+        project_root,
+        planned_samples=planned_samples,
+        results=[result_a, result_b, result_missing, result_no_reference, failed],
+    )
+
+    assert exported["failed_samples"] == ["sample-failed"]
+    assert exported["missing_result_samples"] == ["sample-missing"]
+    assert exported["missing_reference_metadata_samples"] == ["sample-no-reference"]
+    assert exported["not_run_samples"] == ["sample-not-run"]
+    assert exported["reference_inconsistent_samples"] == ["sample-a", "sample-b"]
+    assert exported["cohort"]["reference_consistent"] is False
+    assert exported["cohort"]["merge_ready"] is False
+    assert exported["cohort"]["merge_inputs"] == []
+    by_sample = {record["sample_id"]: record for record in exported["samples"]}
+    assert by_sample["sample-missing"]["comparison_status"] == "missing_result"
+    assert "VCF index" in by_sample["sample-missing"]["error"]
+    assert by_sample["sample-failed"]["comparison_status"] == "failed"
+    assert by_sample["sample-not-run"]["comparison_status"] == "not_run"
+
+    (project_root / "project_summary.json").write_text(
+        json.dumps({"project_root": str(project_root), "variant": exported}),
+        encoding="utf-8",
+    )
+    html = generate_report(project_root, project_root / "project_report.html").read_text(
+        encoding="utf-8"
+    )
+    assert "Failed variant samples" in html
+    assert "Missing variant results" in html
+    assert "Not-run variant samples" in html
+    assert "Missing reference metadata" in html
+    assert "Reference-inconsistent samples" in html
+
+
+def test_project_batch_persists_variant_exports_in_project_summary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / "project-run"
+    config_path = tmp_path / "project.yml"
+    config_path.write_text("samples: []\n", encoding="utf-8")
+    project_config = {
+        "outdir": str(project_root),
+        "continue_on_error": False,
+        "report_title": "Variant Project",
+        "profile": "local",
+        "threads": 1,
+        "memory": None,
+        "queue": None,
+        "time_limit": None,
+        "backend": "system",
+        "conda_env": None,
+        "container_image": None,
+        "samples": [
+            {
+                "sample_id": "sample-a",
+                "workflow": "variant",
+                "ref": "/data/ref.fa",
+                "bam": "/data/sample-a.bam",
+            },
+            {
+                "sample_id": "sample-b",
+                "workflow": "variant",
+                "ref": "/data/ref.fa",
+                "bam": "/data/sample-b.bam",
+            },
+        ],
+    }
+    stats = {
+        "total_variants": 5,
+        "pass_variants": 4,
+        "filtered_variants": 1,
+        "snp_count": 3,
+        "indel_count": 1,
+        "mnp_count": 1,
+        "other_variant_count": 0,
+        "multiallelic_count": 0,
+        "mean_quality": 35.0,
+    }
+
+    def fake_variant(_ref: Path, _bam: Path, **kwargs: object) -> dict[str, object]:
+        outdir = kwargs["outdir"]
+        sample_id = str(kwargs["sample_id"])
+        assert isinstance(outdir, Path)
+        results_dir = outdir / "results"
+        results_dir.mkdir(parents=True)
+        vcf_path = results_dir / f"{sample_id}.vcf.gz"
+        vcf_index = Path(f"{vcf_path}.tbi")
+        vcf_path.write_bytes(b"vcf")
+        vcf_index.write_bytes(b"index")
+        outputs = {"vcf": str(vcf_path), "vcf_index": str(vcf_index)}
+        (outdir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "workflow": "variant",
+                    "version": "1.1.1",
+                    "status": "success",
+                    "started_at": "2026-10-07T00:00:00Z",
+                    "parameters": {"sample_id": sample_id, "caller": "bcftools"},
+                    "inputs": {"ref": "/data/ref.fa", "bam": f"/data/{sample_id}.bam"},
+                    "input_details": {"ref": {"sha256": "shared-reference"}},
+                    "outputs": outputs,
+                    "stats": stats,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return {"status": "success", **outputs}
+
+    def fake_report(_input: Path, output: Path, **_kwargs: object) -> Path:
+        output.write_text("variant report", encoding="utf-8")
+        return output
+
+    monkeypatch.setattr(project_batch, "run_variant_pipeline", fake_variant)
+    monkeypatch.setattr(project_batch, "generate_report", fake_report)
+
+    result = project_batch.run_project_batch(
+        config_path=config_path,
+        project_config=project_config,
+        quiet=True,
+    )
+
+    assert result["variant"]["comparison_sample_count"] == 2
+    assert result["variant"]["project_counts"]["total_variants"] == 10
+    assert Path(result["variant"]["variant_summary_json"]).is_file()
+    assert Path(result["variant"]["variant_summary_tsv"]).is_file()
+    project_summary = json.loads(Path(result["summary"]).read_text(encoding="utf-8"))
+    assert project_summary["variant"]["cohort"]["merge_ready"] is True
+    assert project_summary["variant"]["merge_candidate_count"] == 2
 
 
 def test_cmd_variant_json_returns_success_payload(tmp_path: Path, monkeypatch, capsys) -> None:

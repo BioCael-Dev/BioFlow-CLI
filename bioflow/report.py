@@ -157,7 +157,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Ar
 h1{color:#2c3e50;margin-bottom:.5rem}
 h2{font-size:1rem;color:#2c3e50;margin-bottom:.75rem}
 .subtitle{color:#7f8c8d;margin-bottom:2rem;font-size:.9rem}
-.overview,.workflow-summary,.project-rnaseq{background:#fff;border:1px solid #e1e4e8;border-radius:8px;padding:1.25rem;margin-bottom:1.5rem;
+.overview,.workflow-summary,.project-rnaseq,.project-variant{background:#fff;border:1px solid #e1e4e8;border-radius:8px;padding:1.25rem;margin-bottom:1.5rem;
           box-shadow:0 1px 3px rgba(0,0,0,.04)}
 .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:.75rem;margin-bottom:1rem}
 .stat-card{border:1px solid #e5e7eb;border-radius:8px;padding:.9rem;background:#fbfcfd}
@@ -185,11 +185,13 @@ h2{font-size:1rem;color:#2c3e50;margin-bottom:.75rem}
 .warning-item{border-left:3px solid #f39c12;padding:.35rem .5rem;background:#fff8eb;margin-top:.4rem}
 .artifact-list{display:flex;flex-wrap:wrap;gap:.6rem;margin:.6rem 0}
 .artifact-link{display:inline-flex;border:1px solid #0f766e;border-radius:6px;color:#0f766e;text-decoration:none;padding:.4rem .65rem;font-size:.86rem}
+.comparison-table-wrap{overflow-x:auto}
 .empty-note{color:#6b7280;font-size:.86rem}
 .nav-list{display:flex;flex-wrap:wrap;gap:.5rem}
 .run-card{background:#fff;border:1px solid #e1e4e8;border-radius:8px;
           padding:1.5rem;margin-bottom:1.5rem;box-shadow:0 1px 3px rgba(0,0,0,.04)}
 .run-card.is-hidden{display:none}
+.variant-row.is-hidden{display:none}
 .run-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem}
 .run-title{font-size:1.15rem;font-weight:600;color:#2c3e50}
 .badge{padding:.2rem .6rem;border-radius:12px;font-size:.8rem;font-weight:500;color:#fff}
@@ -221,6 +223,8 @@ _JS = """\
   const searchInput = document.querySelector('[data-report-search]');
   const sortSelect = document.querySelector('[data-report-sort]');
   const list = document.querySelector('[data-run-list]');
+  const variantSearchInput = document.querySelector('[data-variant-search]');
+  const variantRows = Array.from(document.querySelectorAll('[data-variant-row]'));
   let workflow = 'all';
   let status = 'all';
   let query = '';
@@ -276,6 +280,14 @@ _JS = """\
     sortSelect.addEventListener('change', () => {
       applySort();
       applyFilters();
+    });
+  }
+  if (variantSearchInput) {
+    variantSearchInput.addEventListener('input', () => {
+      const needle = (variantSearchInput.value || '').trim().toLowerCase();
+      variantRows.forEach((row) => {
+        row.classList.toggle('is-hidden', Boolean(needle) && !(row.dataset.search || '').includes(needle));
+      });
     });
   }
 
@@ -923,6 +935,146 @@ def _render_project_rnaseq(project_summary: dict[str, Any]) -> str:
     )
 
 
+def _render_variant_result_link(project_summary: dict[str, Any], path_value: Any) -> str:
+    """Render a project-relative variant result link when the target is inside the project."""
+    if not path_value:
+        return "-"
+    path = Path(str(path_value))
+    if not path.is_file():
+        return "-"
+    project_root_raw = project_summary.get("project_root")
+    if not project_root_raw:
+        return _esc(path.name)
+    try:
+        relative = path.resolve().relative_to(Path(str(project_root_raw)).resolve())
+    except ValueError:
+        return _esc(path.name)
+    return f'<a href="{_esc(relative.as_posix())}">{_esc(path.name)}</a>'
+
+
+def _render_project_variant(project_summary: dict[str, Any]) -> str:
+    """Render project-level variant totals, sample comparison, and diagnostics."""
+    variant = project_summary.get("variant", {})
+    if not isinstance(variant, dict) or not variant:
+        return ""
+
+    counts = variant.get("project_counts", {})
+    if not isinstance(counts, dict):
+        counts = {}
+    cohort = variant.get("cohort", {})
+    if not isinstance(cohort, dict):
+        cohort = {}
+    metric_rows = {
+        t("report_metric_variant_planned"): variant.get("planned_sample_count", 0),
+        t("report_metric_variant_successful"): variant.get("successful_sample_count", 0),
+        t("report_metric_variant_comparison"): variant.get("comparison_sample_count", 0),
+        t("report_metric_variant_total"): counts.get("total_variants", 0),
+        t("report_metric_variant_pass"): counts.get("pass_variants", 0),
+        t("report_metric_variant_filtered"): counts.get("filtered_variants", 0),
+        t("report_metric_variant_snp"): counts.get("snp_count", 0),
+        t("report_metric_variant_indel"): counts.get("indel_count", 0),
+        t("report_metric_variant_mnp"): counts.get("mnp_count", 0),
+        t("report_metric_variant_merge_ready"): (
+            t("report_value_yes") if cohort.get("merge_ready") is True else t("report_value_no")
+        ),
+    }
+
+    status_labels = {
+        "ready": t("report_variant_status_ready"),
+        "missing_result": t("report_variant_status_missing_result"),
+        "failed": t("report_status_failed"),
+        "not_run": t("report_variant_status_not_run"),
+    }
+    sample_rows: list[str] = []
+    samples = variant.get("samples", [])
+    if isinstance(samples, list):
+        for record in samples:
+            if not isinstance(record, dict):
+                continue
+            mean_quality = record.get("mean_quality")
+            mean_quality_text = (
+                f"{float(mean_quality):.2f}"
+                if isinstance(mean_quality, (int, float)) and not isinstance(mean_quality, bool)
+                else "-"
+            )
+            comparison_status = str(record.get("comparison_status", ""))
+            search_text = " ".join(
+                str(record.get(key, ""))
+                for key in ("sample_id", "comparison_status", "status", "vcf", "error")
+            ).lower()
+            sample_rows.append(
+                f'<tr class="variant-row" data-variant-row data-search="{_esc(search_text)}">'
+                f'<td>{_esc(record.get("sample_id", "-"))}</td>'
+                f'<td>{_esc(status_labels.get(comparison_status, comparison_status or "-"))}</td>'
+                f'<td>{_esc(_format_metric_value(record.get("pass_variants")))}</td>'
+                f'<td>{_esc(_format_metric_value(record.get("filtered_variants")))}</td>'
+                f'<td>{_esc(_format_metric_value(record.get("snp_count")))}</td>'
+                f'<td>{_esc(_format_metric_value(record.get("indel_count")))}</td>'
+                f'<td>{_esc(_format_metric_value(record.get("mnp_count")))}</td>'
+                f'<td>{_esc(mean_quality_text)}</td>'
+                f'<td>{_render_variant_result_link(project_summary, record.get("vcf"))}</td>'
+                "</tr>"
+            )
+    comparison_table = (
+        f'<input class="control-input" type="search" data-variant-search placeholder="{_esc(t("report_variant_search_placeholder"))}">'
+        '<div class="comparison-table-wrap"><table>'
+        f'<tr><th>{_esc(t("report_variant_col_sample"))}</th>'
+        f'<th>{_esc(t("report_col_status"))}</th>'
+        f'<th>{_esc(t("report_metric_variant_pass"))}</th>'
+        f'<th>{_esc(t("report_metric_variant_filtered"))}</th>'
+        f'<th>{_esc(t("report_metric_variant_snp"))}</th>'
+        f'<th>{_esc(t("report_metric_variant_indel"))}</th>'
+        f'<th>{_esc(t("report_metric_variant_mnp"))}</th>'
+        f'<th>{_esc(t("variant_metric_mean_quality"))}</th>'
+        f'<th>{_esc(t("report_variant_col_vcf"))}</th></tr>'
+        f'{"".join(sample_rows)}</table></div>'
+        if sample_rows
+        else f'<p class="empty-note">{_esc(t("report_empty_value"))}</p>'
+    )
+
+    artifacts = "".join(
+        (
+            _render_project_artifact(
+                variant.get("variant_summary_json"), t("report_artifact_variant_summary_json")
+            ),
+            _render_project_artifact(
+                variant.get("variant_summary_tsv"), t("report_artifact_variant_summary_tsv")
+            ),
+        )
+    )
+    warnings: list[str] = []
+    for key, label in (
+        ("failed_samples", t("report_variant_failed_samples")),
+        ("missing_result_samples", t("report_variant_missing_results")),
+        ("not_run_samples", t("report_variant_not_run")),
+        (
+            "missing_reference_metadata_samples",
+            t("report_variant_missing_reference_metadata"),
+        ),
+        ("reference_inconsistent_samples", t("report_variant_reference_inconsistent")),
+    ):
+        values = variant.get(key, [])
+        if isinstance(values, list) and values:
+            warnings.append(
+                f'<div class="warning-item"><strong>{_esc(label)}:</strong> '
+                f'{_esc(", ".join(str(value) for value in values))}</div>'
+            )
+
+    return "\n".join(
+        [
+            '<section class="project-variant">',
+            f'<h2>{_esc(t("report_section_variant_project"))}</h2>',
+            f'<div class="overview-panel"><h2>{_esc(t("report_section_variant_metrics"))}</h2>{_render_metric_list(metric_rows)}</div>',
+            f'<div class="section-title">{_esc(t("report_section_variant_comparison"))}</div>',
+            comparison_table,
+            f'<div class="section-title">{_esc(t("report_section_variant_exports"))}</div>',
+            f'<div class="artifact-list">{artifacts or _esc(t("report_empty_value"))}</div>',
+            "".join(warnings),
+            "</section>",
+        ]
+    )
+
+
 def _render_overview(overview: ReportOverview, runs: list[RunInfo]) -> str:
     """Render report overview cards, workflow matrix, filters, and navigation."""
     workflows = sorted(overview.workflow_counts)
@@ -1092,6 +1244,7 @@ class DefaultHTMLTemplate:
             f'<p class="subtitle">{_esc(subtitle)}</p>\n'
             f"{_render_overview(overview, runs)}\n"
             f"{_render_project_rnaseq(self.project_summary)}\n"
+            f"{_render_project_variant(self.project_summary)}\n"
             f"{_render_workflow_summaries(runs)}\n"
             f'<section data-run-list>{cards}</section>\n'
             f'<footer>Generated by BioFlow-CLI v{__version__}</footer>\n'

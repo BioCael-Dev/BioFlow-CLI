@@ -47,6 +47,35 @@ RNASEQ_SAMPLE_METADATA_COLUMNS = (
     "error",
 )
 
+VARIANT_COUNT_KEYS = (
+    "total_variants",
+    "pass_variants",
+    "filtered_variants",
+    "snp_count",
+    "indel_count",
+    "mnp_count",
+    "other_variant_count",
+    "multiallelic_count",
+)
+
+VARIANT_SUMMARY_COLUMNS = (
+    "sample_id",
+    "status",
+    "comparison_status",
+    "reference",
+    "reference_sha256",
+    "caller",
+    "min_qual",
+    "min_depth",
+    "run_dir",
+    "vcf",
+    "vcf_index",
+    *VARIANT_COUNT_KEYS,
+    "mean_quality",
+    "merge_candidate",
+    "error",
+)
+
 
 @dataclass
 class ProjectJobResult:
@@ -463,6 +492,253 @@ def _write_rnaseq_project_exports(
     }
 
 
+def _variant_metric(metadata: dict[str, Any], key: str) -> Any:
+    """Read one variant metric from the stable stats/summary fields."""
+    for section_name in ("stats", "summary"):
+        section = metadata.get(section_name)
+        if isinstance(section, dict) and key in section:
+            return section[key]
+    return None
+
+
+def _variant_tsv_cell(value: Any) -> str:
+    """Format one project-level variant summary TSV cell."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _write_variant_project_exports(
+    project_root: Path,
+    *,
+    planned_samples: list[dict[str, Any]],
+    results: list[ProjectJobResult],
+) -> dict[str, Any]:
+    """Create stable project-level variant summaries and merge metadata."""
+    json_path = project_root / "variant_summary.json"
+    tsv_path = project_root / "variant_summary.tsv"
+    for stale_output in (json_path, tsv_path):
+        stale_output.unlink(missing_ok=True)
+
+    variant_samples = [sample for sample in planned_samples if sample.get("workflow") == "variant"]
+    if not variant_samples:
+        return {}
+
+    results_by_sample = {result.sample_id: result for result in results if result.workflow == "variant"}
+    sample_records: list[dict[str, Any]] = []
+    failed_samples: list[str] = []
+    missing_result_samples: list[str] = []
+    not_run_samples: list[str] = []
+    missing_reference_metadata_samples: list[str] = []
+    project_counts = {key: 0 for key in VARIANT_COUNT_KEYS}
+    reference_groups: dict[str, dict[str, Any]] = {}
+
+    for sample in variant_samples:
+        sample_id = str(sample["sample_id"])
+        result = results_by_sample.get(sample_id)
+        record: dict[str, Any] = {
+            "sample_id": sample_id,
+            "status": result.status if result is not None else "not_run",
+            "comparison_status": "not_run",
+            "reference": str(sample.get("ref", "")),
+            "reference_sha256": "",
+            "caller": str(sample.get("caller", "bcftools")),
+            "min_qual": sample.get("min_qual", 20.0),
+            "min_depth": sample.get("min_depth", 1),
+            "run_dir": str(result.run_dir) if result is not None else "",
+            "vcf": "",
+            "vcf_index": "",
+            **{key: None for key in VARIANT_COUNT_KEYS},
+            "mean_quality": None,
+            "merge_candidate": False,
+            "error": "",
+        }
+
+        if result is None:
+            not_run_samples.append(sample_id)
+            record["error"] = "sample was not run"
+            sample_records.append(record)
+            continue
+
+        if result.status != "success":
+            failed_samples.append(sample_id)
+            record["comparison_status"] = "failed"
+            record["error"] = result.error or f"run status: {result.status}"
+            sample_records.append(record)
+            continue
+
+        metadata = _read_run_metadata(result.run_dir)
+        inputs = metadata.get("inputs") if isinstance(metadata.get("inputs"), dict) else {}
+        parameters = (
+            metadata.get("parameters") if isinstance(metadata.get("parameters"), dict) else {}
+        )
+        outputs = metadata.get("outputs") if isinstance(metadata.get("outputs"), dict) else {}
+        input_details = (
+            metadata.get("input_details")
+            if isinstance(metadata.get("input_details"), dict)
+            else {}
+        )
+        reference_details = (
+            input_details.get("ref") if isinstance(input_details.get("ref"), dict) else {}
+        )
+
+        record["reference"] = str(inputs.get("ref") or record["reference"])
+        record["reference_sha256"] = str(reference_details.get("sha256") or "")
+        record["caller"] = str(parameters.get("caller") or record["caller"])
+        record["min_qual"] = parameters.get("min_qual", record["min_qual"])
+        record["min_depth"] = parameters.get("min_depth", record["min_depth"])
+        record["vcf"] = str(outputs.get("vcf") or result.outputs.get("vcf") or "")
+        record["vcf_index"] = str(
+            outputs.get("vcf_index") or result.outputs.get("vcf_index") or ""
+        )
+        for key in (*VARIANT_COUNT_KEYS, "mean_quality"):
+            record[key] = _variant_metric(metadata, key)
+
+        vcf_ready = bool(record["vcf"]) and Path(str(record["vcf"])).is_file()
+        index_ready = bool(record["vcf_index"]) and Path(str(record["vcf_index"])).is_file()
+        metrics_ready = all(
+            isinstance(record[key], int)
+            and not isinstance(record[key], bool)
+            and int(record[key]) >= 0
+            for key in VARIANT_COUNT_KEYS
+        )
+        mean_quality = record["mean_quality"]
+        quality_ready = mean_quality is None or (
+            isinstance(mean_quality, (int, float))
+            and not isinstance(mean_quality, bool)
+            and math.isfinite(float(mean_quality))
+            and float(mean_quality) >= 0
+        )
+        metrics_ready = metrics_ready and quality_ready
+        if not (vcf_ready and index_ready and metrics_ready):
+            missing_result_samples.append(sample_id)
+            record["comparison_status"] = "missing_result"
+            missing_parts: list[str] = []
+            if not vcf_ready:
+                missing_parts.append("VCF")
+            if not index_ready:
+                missing_parts.append("VCF index")
+            if not metrics_ready:
+                missing_parts.append("variant metrics")
+            record["error"] = f"missing or invalid: {', '.join(missing_parts)}"
+            sample_records.append(record)
+            continue
+
+        record["comparison_status"] = "ready"
+        for key in VARIANT_COUNT_KEYS:
+            project_counts[key] += int(record[key])
+
+        if record["reference"] and record["reference_sha256"]:
+            record["merge_candidate"] = True
+            reference_key = str(record["reference_sha256"])
+            group = reference_groups.setdefault(
+                reference_key,
+                {
+                    "reference": record["reference"],
+                    "reference_sha256": record["reference_sha256"],
+                    "samples": [],
+                },
+            )
+            group["samples"].append(sample_id)
+        else:
+            missing_reference_metadata_samples.append(sample_id)
+        sample_records.append(record)
+
+    merge_candidates = [
+        record for record in sample_records if record.get("merge_candidate") is True
+    ]
+    comparison_records = [
+        record for record in sample_records if record.get("comparison_status") == "ready"
+    ]
+    reference_group_list = sorted(
+        reference_groups.values(),
+        key=lambda group: (str(group.get("reference_sha256", "")), str(group.get("reference", ""))),
+    )
+    reference_consistent = (
+        len(reference_group_list) == 1
+        and bool(merge_candidates)
+        and len(merge_candidates) == len(comparison_records)
+    )
+    reference_inconsistent_samples = (
+        [str(record["sample_id"]) for record in merge_candidates]
+        if len(reference_group_list) > 1
+        else []
+    )
+    cohort_merge_ready = reference_consistent
+    merge_inputs = (
+        [
+            {
+                "sample_id": record["sample_id"],
+                "vcf": record["vcf"],
+                "vcf_index": record["vcf_index"],
+            }
+            for record in merge_candidates
+        ]
+        if cohort_merge_ready
+        else []
+    )
+
+    payload: dict[str, Any] = {
+        "schema_version": "bioflow.variant-summary.v1",
+        "generated_at": utc_now_iso(),
+        "project_root": str(project_root),
+        "planned_sample_count": len(variant_samples),
+        "successful_sample_count": sum(
+            1
+            for sample in variant_samples
+            if (result := results_by_sample.get(str(sample["sample_id"]))) is not None
+            and result.status == "success"
+        ),
+        "comparison_sample_count": sum(
+            1 for record in sample_records if record["comparison_status"] == "ready"
+        ),
+        "merge_candidate_count": len(merge_candidates),
+        "project_counts": project_counts,
+        "failed_samples": failed_samples,
+        "missing_result_samples": missing_result_samples,
+        "not_run_samples": not_run_samples,
+        "missing_reference_metadata_samples": missing_reference_metadata_samples,
+        "reference_inconsistent_samples": reference_inconsistent_samples,
+        "cohort": {
+            "reference_consistent": reference_consistent,
+            "merge_ready": cohort_merge_ready,
+            "reference": (
+                str(reference_group_list[0]["reference"]) if reference_consistent else ""
+            ),
+            "reference_sha256": (
+                str(reference_group_list[0]["reference_sha256"])
+                if reference_consistent
+                else ""
+            ),
+            "reference_groups": reference_group_list,
+            "merge_inputs": merge_inputs,
+        },
+        "variant_summary_json": str(json_path),
+        "variant_summary_tsv": str(tsv_path),
+        "samples": sample_records,
+    }
+
+    json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    with tsv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=VARIANT_SUMMARY_COLUMNS,
+            dialect="excel-tab",
+            lineterminator="\n",
+        )
+        writer.writeheader()
+        for record in sample_records:
+            writer.writerow(
+                {
+                    column: _variant_tsv_cell(record.get(column))
+                    for column in VARIANT_SUMMARY_COLUMNS
+                }
+            )
+    return payload
+
+
 def _write_project_summary(
     project_root: Path,
     *,
@@ -475,6 +751,7 @@ def _write_project_summary(
     summary_json_path: Path | None = None,
     summary_tsv_path: Path | None = None,
     rnaseq: dict[str, Any] | None = None,
+    variant: dict[str, Any] | None = None,
 ) -> Path:
     """写入项目级汇总 JSON。"""
     success_count = sum(1 for item in samples if item.status == "success")
@@ -504,6 +781,7 @@ def _write_project_summary(
             for workflow in sorted({item.workflow for item in samples})
         },
         "rnaseq": rnaseq or {},
+        "variant": variant or {},
     }
     summary_path = project_root / "project_summary.json"
     summary_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -572,6 +850,11 @@ def run_project_batch(
         planned_samples=project_config["samples"],
         results=results,
     )
+    variant_exports = _write_variant_project_exports(
+        project_root,
+        planned_samples=project_config["samples"],
+        results=results,
+    )
     _write_project_summary(
         project_root,
         samples=results,
@@ -580,6 +863,7 @@ def run_project_batch(
         continue_on_error=continue_on_error,
         planned_sample_count=planned_sample_count,
         rnaseq=rnaseq_exports,
+        variant=variant_exports,
     )
 
     report_path: Path | None = None
@@ -626,6 +910,7 @@ def run_project_batch(
         summary_json_path=summary_json_path,
         summary_tsv_path=summary_tsv_path,
         rnaseq=rnaseq_exports,
+        variant=variant_exports,
     )
 
     success_count = sum(1 for item in results if item.status == "success")
@@ -646,5 +931,6 @@ def run_project_batch(
         "failed_count": failed_count,
         "continue_on_error": continue_on_error,
         "rnaseq": rnaseq_exports,
+        "variant": variant_exports,
         "samples": [item.as_dict() for item in results],
     }
