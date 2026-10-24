@@ -1,4 +1,15 @@
 STRINGS = {
+    'menu_catalog': '[Catalog] Workflow capabilities',
+    'catalog_title': 'Workflow Catalog',
+    'catalog_scope': 'Declared capabilities; tool availability depends on the environment. Profiles record resources; hpc-slurm does not submit scheduler jobs.',
+    'catalog_supported_inputs': 'Inputs',
+    'catalog_key_outputs': 'Outputs',
+    'catalog_required_tools': 'Tools',
+    'catalog_supported_profiles': 'Profiles',
+    'catalog_supported_backends': 'Backends',
+    'catalog_example': 'Example',
+    'catalog_project': 'Project YAML supported',
+
     # === Main Menu ===
     "app_title": "BioFlow-CLI  Bioinformatics Workflow Tool",
     "menu_prompt": "Select an action:",

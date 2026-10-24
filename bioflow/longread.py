@@ -22,6 +22,7 @@ from bioflow.execution import (
     summarize_commands,
 )
 from bioflow.i18n import t
+from bioflow.registry import get_workflow_manifest
 from bioflow.preflight import preflight_check
 from bioflow.run_layout import (
     STEP_FAILED,
@@ -45,7 +46,7 @@ from bioflow.run_layout import (
 
 console = Console()
 
-LONGREAD_REQUIRED_TOOLS = ("minimap2", "samtools")
+LONGREAD_REQUIRED_TOOLS = get_workflow_manifest("longread").required_tools
 LONGREAD_PRESETS = ("map-ont", "map-hifi", "map-pb")
 LONGREAD_STEP_QC = "sequence_stats"
 LONGREAD_STEP_MAP = "map_sort"

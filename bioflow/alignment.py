@@ -21,6 +21,7 @@ from bioflow.execution import (
     stringify_command,
     summarize_commands,
 )
+from bioflow.registry import get_workflow_manifest
 from bioflow.preflight import preflight_check
 from bioflow.run_layout import (
     STEP_FAILED,
@@ -45,7 +46,7 @@ from bioflow.run_layout import (
 console = Console()
 
 # 比对流程依赖的工具
-ALIGN_REQUIRED_TOOLS = ("bwa", "samtools")
+ALIGN_REQUIRED_TOOLS = get_workflow_manifest("align").required_tools
 ALIGN_STEP_INDEX = "bwa_index"
 ALIGN_STEP_MAP = "map_sort"
 ALIGN_STEP_BAM_INDEX = "bam_index"

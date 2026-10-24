@@ -1,4 +1,15 @@
 STRINGS = {
+    'menu_catalog': '[目录] 工作流能力',
+    'catalog_title': '工作流目录',
+    'catalog_scope': '目录列出声明能力；工具可用性取决于环境。Profile 记录资源信息；hpc-slurm 不提交调度任务。',
+    'catalog_supported_inputs': '输入',
+    'catalog_key_outputs': '输出',
+    'catalog_required_tools': '依赖工具',
+    'catalog_supported_profiles': 'Profile',
+    'catalog_supported_backends': '执行后端',
+    'catalog_example': '示例',
+    'catalog_project': '支持项目 YAML',
+
     # === 主菜单 ===
     "app_title": "BioFlow-CLI  生物信息学工作流工具",
     "menu_prompt": "请选择操作：",

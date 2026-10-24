@@ -15,6 +15,7 @@ from rich.table import Table
 
 from bioflow.execution import ResolvedCommand, resolve_command, stringify_command, summarize_commands
 from bioflow.i18n import t
+from bioflow.registry import get_workflow_manifest
 from bioflow.preflight import preflight_check
 from bioflow.run_layout import (
     STEP_FAILED,
@@ -37,7 +38,7 @@ from bioflow.run_layout import (
 
 console = Console()
 
-RNASEQ_REQUIRED_TOOLS = ("fastqc", "salmon")
+RNASEQ_REQUIRED_TOOLS = get_workflow_manifest("rnaseq").required_tools
 RNASEQ_STEP_FASTQC = "fastqc"
 RNASEQ_STEP_INDEX = "salmon_index"
 RNASEQ_STEP_QUANT = "salmon_quant"

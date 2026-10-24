@@ -41,6 +41,25 @@ BioFlow-CLI 是一个基于 **MIT 许可证** 发布的 **开源项目**。
 - **结构化输出** — 支持 `--json` 输出，便于自动化集成和脚本调用
 - **标准退出码** — 提供统一的成功 / 参数错误 / 运行时错误 / 依赖缺失状态码
 
+## 工作流目录
+
+通过 `bioflow workflows` 或 TUI 的 **[目录] 工作流能力** 菜单查看全部六类分析工作流。`bioflow workflows rnaseq` 查询单个工作流；`bioflow workflows --json` 和 `bioflow --json workflows` 输出带版本标识 `bioflow.workflow-catalog.v1` 的 JSON 目录。目录查询不运行分析工具，也不检测安装状态；本机工具状态可用 `bioflow env --list` 查看。
+
+`bioflow/registry.py` 中的 manifest 是配置字段、依赖工具、CLI 命令摘要、TUI 菜单标识和报告输出选择的共同来源。六类分析工作流均支持 CLI、TUI、项目 YAML、inspect、resume 和报告。
+
+| 命令 | 输入 / 参考 | 依赖工具 | 关键结果 | 示例配置 |
+| --- | --- | --- | --- | --- |
+| `qc` | 单端/双端 FASTQ | FastQC、Trimmomatic | 修剪 reads、双端未配对 reads、前后 FastQC | [qc.yml](examples/qc.yml) |
+| `align` | 单端/双端 reads + 基因组 FASTA | BWA、SAMtools | 排序 BAM、BAI、flagstat | [align.yml](examples/align.yml) |
+| `longread` | 长读长 FASTA/FASTQ + 基因组 FASTA | minimap2、SAMtools | BAM、BAI、flagstat、长度/质量摘要 | [longread.yml](examples/longread.yml) |
+| `variant` | 按坐标排序 BAM + 基因组 FASTA | SAMtools、BCFtools | BCF、过滤 VCF.gz、索引、统计与摘要 | [variant.yml](examples/variant.yml) |
+| `search` | 查询 FASTA + 核酸数据库 FASTA | makeblastdb、blastn | 命中 TSV 与摘要 | [search.yml](examples/search.yml) |
+| `rnaseq` | 单端/双端 FASTQ + 转录本 FASTA 或 Salmon 索引 | FastQC、Salmon | quant.sf、meta_info、摘要、FastQC、索引 | [rnaseq.yml](examples/rnaseq.yml) |
+
+六类工作流均接受 `system`、`conda`、`container` 执行后端。Conda 需要 `conda_env`；容器需要 `container_image`、Docker 或 Apptainer，以及选定环境/镜像中的相应工具。这些是已声明的命令包装能力，不表示所有平台/工具组合均已实测。基础程序要求 Python 3.9+；外部工具和容器运行时须支持所用操作系统。
+
+目录列出标准 profile 名称 `local`、`workstation`、`hpc-slurm`。Profile 记录资源请求，命令仍在当前进程通过所选后端执行；`hpc-slurm` 不提交 Slurm 任务。为保持兼容，仍接受非空的自定义 profile 名称。既有工作流命令、平铺/分组 YAML 配置和旧运行 metadata 继续支持。`seq`、`batch`、`env`、`project`、`inspect`、`report` 属于六类分析 manifest 之外的工具或编排命令。用 `bioflow <command> --help` 查看参数；替换示例输入路径后执行 `bioflow <workflow> --config examples/<workflow>.yml`。混合项目参考 [project.yml](examples/project.yml)。
+
 ## 快速开始
 
 ### 安全安装（推荐）
@@ -401,7 +420,7 @@ pip install -e .[dev]
 
 ## 项目状态
 
-当前开发版本：**v1.1.1**
+当前开发版本：**v1.1.2**
 
 ## 许可证
 

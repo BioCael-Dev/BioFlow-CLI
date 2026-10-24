@@ -14,6 +14,7 @@ from rich.table import Table
 
 from bioflow.execution import ResolvedCommand, resolve_command, stringify_command
 from bioflow.i18n import t
+from bioflow.registry import get_workflow_manifest
 from bioflow.preflight import preflight_check
 from bioflow.run_layout import (
     STEP_FAILED,
@@ -37,7 +38,7 @@ from bioflow.run_layout import (
 
 console = Console()
 
-SEARCH_REQUIRED_TOOLS = ("makeblastdb", "blastn")
+SEARCH_REQUIRED_TOOLS = get_workflow_manifest("search").required_tools
 SEARCH_STEP_DB = "makeblastdb"
 SEARCH_STEP_BLASTN = "blastn"
 SEARCH_STEP_SUMMARY = "summary"

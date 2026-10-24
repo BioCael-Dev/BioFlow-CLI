@@ -13,6 +13,7 @@ from rich.panel import Panel
 
 from bioflow.i18n import t
 from bioflow.execution import ResolvedCommand, resolve_command, summarize_commands
+from bioflow.registry import get_workflow_manifest
 from bioflow.preflight import PreflightError, preflight_check
 from bioflow.run_layout import (
     STEP_FAILED,
@@ -36,7 +37,7 @@ from bioflow.run_layout import (
 console = Console()
 
 # QC 流程依赖的工具
-QC_REQUIRED_TOOLS = ("fastqc", "trimmomatic")
+QC_REQUIRED_TOOLS = get_workflow_manifest("qc").required_tools
 QC_STEP_FASTQC_PRE = "fastqc_pre"
 QC_STEP_TRIM = "trimmomatic"
 QC_STEP_FASTQC_POST = "fastqc_post"

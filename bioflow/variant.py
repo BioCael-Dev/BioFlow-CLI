@@ -22,6 +22,7 @@ from bioflow.execution import (
     summarize_commands,
 )
 from bioflow.i18n import t
+from bioflow.registry import get_workflow_manifest
 from bioflow.preflight import preflight_check
 from bioflow.run_layout import (
     STEP_FAILED,
@@ -46,7 +47,7 @@ from bioflow.run_layout import (
 
 console = Console()
 
-VARIANT_REQUIRED_TOOLS = ("samtools", "bcftools")
+VARIANT_REQUIRED_TOOLS = get_workflow_manifest("variant").required_tools
 VARIANT_CALLERS = ("bcftools",)
 VARIANT_STEP_REFERENCE_INDEX = "reference_index"
 VARIANT_STEP_BAM_INDEX = "bam_index"

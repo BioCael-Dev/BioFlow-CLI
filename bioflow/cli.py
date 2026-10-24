@@ -14,6 +14,8 @@ from typing import Any
 from rich.console import Console
 
 from bioflow import __version__
+from bioflow.registry import get_workflow_manifest, workflow_catalog
+from bioflow.catalog import render_catalog
 from bioflow.bio_tasks import (
     batch_format_sequences,
     display_batch_results,
@@ -1424,6 +1426,10 @@ def main() -> int:
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
+    parser_workflows = subparsers.add_parser("workflows", help="List built-in workflow capabilities and entry points")
+    parser_workflows.add_argument("workflow", nargs="?", choices=[item["workflow_id"] for item in workflow_catalog()])
+    parser_workflows.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output catalog as JSON")
+
     # seq 子命令
     parser_seq = subparsers.add_parser("seq", help="Format FASTA/FASTQ sequences")
     parser_seq.add_argument("--input", "-i", required=True, help="Input FASTA/FASTQ file")
@@ -1437,7 +1443,7 @@ def main() -> int:
     env_group.add_argument("--install", "-i", metavar="TOOL", help="Install a specific tool")
 
     # qc 子命令
-    parser_qc = subparsers.add_parser("qc", help="Run QC pipeline (FastQC + Trimmomatic)")
+    parser_qc = subparsers.add_parser("qc", help=get_workflow_manifest("qc").cli_help)
     parser_qc.add_argument("--config", help="YAML config file for qc workflow")
     parser_qc.add_argument("--input", "-i", help="Input FASTQ file")
     parser_qc.add_argument("--input-r1", help="Input R1 FASTQ file for paired-end mode")
@@ -1467,7 +1473,7 @@ def main() -> int:
     parser_batch.add_argument("--continue-on-error", "-c", action="store_true", help="Continue processing on error")
 
     # align 子命令
-    parser_align = subparsers.add_parser("align", help="Run alignment pipeline (BWA + SAMtools)")
+    parser_align = subparsers.add_parser("align", help=get_workflow_manifest("align").cli_help)
     parser_align.add_argument("--config", help="YAML config file for alignment workflow")
     parser_align.add_argument("--ref", "-r", help="Reference genome FASTA file")
     parser_align.add_argument("--input", "-i", help="Input reads file (FASTQ)")
@@ -1486,7 +1492,7 @@ def main() -> int:
     parser_align.add_argument("--container-image", dest="container_image", help="Container image name for backend metadata")
 
     # search 子命令
-    parser_search = subparsers.add_parser("search", help="Run BLAST nucleotide search")
+    parser_search = subparsers.add_parser("search", help=get_workflow_manifest("search").cli_help)
     parser_search.add_argument("--config", help="YAML config file for search workflow")
     parser_search.add_argument("--db", help="Reference database FASTA file")
     parser_search.add_argument("--query", "-q", help="Query FASTA file")
@@ -1510,7 +1516,7 @@ def main() -> int:
     parser_search.add_argument("--container-image", dest="container_image", help="Container image name for backend metadata")
 
     # rnaseq subcommand
-    parser_rnaseq = subparsers.add_parser("rnaseq", help="Run RNA-seq quantification (FastQC + Salmon)")
+    parser_rnaseq = subparsers.add_parser("rnaseq", help=get_workflow_manifest("rnaseq").cli_help)
     parser_rnaseq.add_argument("--config", help="YAML config file for rnaseq workflow")
     reference_group = parser_rnaseq.add_mutually_exclusive_group()
     reference_group.add_argument("--transcriptome", help="Transcriptome FASTA used to build a Salmon index")
@@ -1538,7 +1544,7 @@ def main() -> int:
     # longread subcommand
     parser_longread = subparsers.add_parser(
         "longread",
-        help="Run long-read QC and alignment (minimap2 + SAMtools)",
+        help=get_workflow_manifest("longread").cli_help,
     )
     parser_longread.add_argument("--config", help="YAML config file for longread workflow")
     parser_longread.add_argument("--ref", "-r", help="Reference genome FASTA file")
@@ -1580,7 +1586,7 @@ def main() -> int:
     # variant subcommand
     parser_variant = subparsers.add_parser(
         "variant",
-        help="Run variant calling from a sorted BAM (SAMtools + BCFtools)",
+        help=get_workflow_manifest("variant").cli_help,
     )
     parser_variant.add_argument("--config", help="YAML config file for variant workflow")
     parser_variant.add_argument("--ref", "-r", help="Reference genome FASTA file")
@@ -1655,7 +1661,21 @@ def main() -> int:
     init_language()
 
     # 路由到子命令
-    if args.command == "seq":
+    if args.command == "workflows":
+        catalog = workflow_catalog(args.workflow)
+        if args.json:
+            print(json.dumps({
+                "schema_version": "bioflow.workflow-catalog.v1",
+                "execution_notes": (
+                    "Declared capabilities, not installation checks. Profiles record resources; "
+                    "hpc-slurm does not submit scheduler jobs. Custom non-empty profiles remain accepted."
+                ),
+                "workflows": catalog,
+            }, ensure_ascii=False))
+        else:
+            console_out.print(render_catalog(catalog), markup=False)
+        return EXIT_SUCCESS
+    elif args.command == "seq":
         return cmd_seq(args)
     elif args.command == "batch":
         return cmd_batch(args)

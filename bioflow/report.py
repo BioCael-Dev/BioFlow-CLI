@@ -14,6 +14,8 @@ from rich.console import Console
 from rich.panel import Panel
 
 from bioflow import __version__
+from bioflow.registry import WORKFLOW_REGISTRY
+
 from bioflow.i18n import t
 
 console = Console()
@@ -616,20 +618,13 @@ def _core_outputs(run: RunInfo) -> dict[str, Any]:
     """Return workflow-specific core outputs/summary for the report."""
     outputs = dict(run.outputs)
 
+    manifest = WORKFLOW_REGISTRY.get(run.workflow)
+    core = {key: outputs[key] for key in manifest.key_outputs if key in outputs} if manifest else outputs
+
     if run.workflow == "qc":
-        keys = (
-            "trimmed",
-            "trimmed_r1",
-            "trimmed_r2",
-            "unpaired_r1",
-            "unpaired_r2",
-            "fastqc_pre",
-            "fastqc_post",
-        )
-        return {key: outputs[key] for key in keys if key in outputs}
+        return core
 
     if run.workflow == "align":
-        core = {key: outputs[key] for key in ("bam", "bai", "flagstat") if key in outputs}
         if "mapping_rate" in run.stats:
             core["mapping_rate"] = f"{float(run.stats['mapping_rate']):.2%}"
         if "mapped" in run.stats:
@@ -637,7 +632,6 @@ def _core_outputs(run: RunInfo) -> dict[str, Any]:
         return core
 
     if run.workflow == "search":
-        core = {key: outputs[key] for key in ("tsv", "summary") if key in outputs}
         if "hit_count" in run.summary:
             core["hit_count"] = run.summary["hit_count"]
         best_hit = run.summary.get("best_hit")
@@ -646,22 +640,12 @@ def _core_outputs(run: RunInfo) -> dict[str, Any]:
         return core
 
     if run.workflow == "rnaseq":
-        core = {
-            key: outputs[key]
-            for key in ("quant_sf", "meta_info", "summary", "fastqc", "salmon_index")
-            if key in outputs
-        }
         for key in ("mapping_rate", "mapped_fragments", "expressed_transcripts"):
             if key in run.summary:
                 core[key] = run.summary[key]
         return core
 
     if run.workflow == "longread":
-        core = {
-            key: outputs[key]
-            for key in ("bam", "bai", "flagstat", "qc_summary", "summary")
-            if key in outputs
-        }
         for key in ("read_count", "n50", "mean_read_length", "mapping_rate"):
             if key in run.stats:
                 core[key] = run.stats[key]
@@ -670,11 +654,6 @@ def _core_outputs(run: RunInfo) -> dict[str, Any]:
         return core
 
     if run.workflow == "variant":
-        core = {
-            key: outputs[key]
-            for key in ("bcf", "vcf", "vcf_index", "bcftools_stats", "summary")
-            if key in outputs
-        }
         for key in ("total_variants", "pass_variants", "snp_count", "indel_count"):
             if key in run.stats:
                 core[key] = run.stats[key]

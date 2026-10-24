@@ -12,6 +12,8 @@ from rich.panel import Panel
 from rich.text import Text
 
 from bioflow import __version__
+from bioflow.catalog import render_catalog
+from bioflow.registry import get_workflow_manifest, workflow_catalog
 from bioflow.alignment import align_menu
 from bioflow.bio_tasks import seq_menu
 from bioflow.env_manager import env_menu
@@ -84,15 +86,18 @@ def main_menu() -> None:
     """主菜单循环。"""
     while True:
         show_banner()
+        workflow_menus = {
+            get_workflow_manifest(workflow).menu_key: handler
+            for workflow, handler in (
+                ("qc", qc_menu), ("align", align_menu), ("longread", longread_menu),
+                ("variant", variant_menu), ("search", search_menu), ("rnaseq", rnaseq_menu),
+            )
+        }
         choices = [
             t("menu_env"),
             t("menu_seq"),
-            t("menu_qc"),
-            t("menu_align"),
-            t("menu_longread"),
-            t("menu_variant"),
-            t("menu_search"),
-            t("menu_rnaseq"),
+            t("menu_catalog"),
+            *(t(key) for key in workflow_menus),
             t("menu_report"),
             t("menu_settings"),
             t("menu_exit"),
@@ -117,18 +122,10 @@ def main_menu() -> None:
             env_menu()
         elif answer == t("menu_seq"):
             seq_menu()
-        elif answer == t("menu_qc"):
-            qc_menu()
-        elif answer == t("menu_align"):
-            align_menu()
-        elif answer == t("menu_longread"):
-            longread_menu()
-        elif answer == t("menu_variant"):
-            variant_menu()
-        elif answer == t("menu_search"):
-            search_menu()
-        elif answer == t("menu_rnaseq"):
-            rnaseq_menu()
+        elif answer == t("menu_catalog"):
+            console.print(render_catalog(workflow_catalog()), markup=False)
+        elif answer in {t(key) for key in workflow_menus}:
+            next(handler for key, handler in workflow_menus.items() if t(key) == answer)()
         elif answer == t("menu_report"):
             report_menu()
         elif answer == t("menu_settings"):

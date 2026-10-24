@@ -59,6 +59,25 @@ License text: [MIT License](LICENSE)
 - **Structured Output**: `--json` output for automation pipelines
 - **Stable Exit Codes**: standardized success/error/dependency signaling
 
+## Workflow Catalog
+
+Use `bioflow workflows` (or the TUI **[Catalog] Workflow capabilities** menu) to inspect all six analysis workflows. Use `bioflow workflows rnaseq` for one workflow, and `bioflow workflows --json` or `bioflow --json workflows` for the versioned `bioflow.workflow-catalog.v1` JSON catalog. This query does not run analysis tools or check their installation; use `bioflow env --list` to inspect local tool availability.
+
+The manifest in `bioflow/registry.py` is the shared source for configuration fields, required tools, CLI command summaries, TUI menu identities, and report output selection. Each analysis workflow supports CLI, TUI, project YAML, inspect, resume, and reports.
+
+| Command | Inputs / reference | Required tools | Key results | Example config |
+| --- | --- | --- | --- | --- |
+| `qc` | Single/paired FASTQ | FastQC, Trimmomatic | Trimmed reads, unpaired reads (PE), pre/post FastQC | [qc.yml](examples/qc.yml) |
+| `align` | Single/paired reads + genome FASTA | BWA, SAMtools | Sorted BAM, BAI, flagstat | [align.yml](examples/align.yml) |
+| `longread` | Long-read FASTA/FASTQ + genome FASTA | minimap2, SAMtools | BAM, BAI, flagstat, length/quality summaries | [longread.yml](examples/longread.yml) |
+| `variant` | Coordinate-sorted BAM + genome FASTA | SAMtools, BCFtools | BCF, filtered VCF.gz, index, stats, summary | [variant.yml](examples/variant.yml) |
+| `search` | Query FASTA + nucleotide database FASTA | makeblastdb, blastn | Hits TSV, summary | [search.yml](examples/search.yml) |
+| `rnaseq` | Single/paired FASTQ + transcriptome FASTA or Salmon index | FastQC, Salmon | quant.sf, meta_info, summary, FastQC, index | [rnaseq.yml](examples/rnaseq.yml) |
+
+All six workflows accept `system`, `conda`, and `container` execution backends. Conda requires `conda_env`; containers require `container_image`, Docker or Apptainer, and the relevant tools in the selected environment/image. These are declared wrapper capabilities, not a claim that every platform/tool combination has been tested. Python 3.9+ is required; external tools and container runtimes must support your operating system.
+
+The catalog lists the standard `local`, `workstation`, and `hpc-slurm` profile names. Profiles record resource requests; commands execute in the current process through the selected backend. `hpc-slurm` does not submit Slurm jobs. Custom non-empty profile names remain accepted for compatibility. Existing workflow commands, flat/grouped YAML configs, and older run metadata remain supported. `seq`, `batch`, `env`, `project`, `inspect`, and `report` are utility/orchestration commands outside the six analysis manifests. Start with `bioflow <command> --help`; run an example with `bioflow <workflow> --config examples/<workflow>.yml` after replacing its input paths. Mixed projects use [project.yml](examples/project.yml).
+
 ## Installation
 
 ### Option A: Secure installer (recommended)
@@ -368,7 +387,7 @@ pip install -e .[dev]
 
 ## Project Status
 
-Current development version: **v1.1.1**
+Current development version: **v1.1.2**
 
 Release history and notes: [GitHub Releases](https://github.com/BioCael-Dev/BioFlow-CLI/releases)
 

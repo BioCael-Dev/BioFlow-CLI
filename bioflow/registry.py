@@ -27,6 +27,18 @@ class WorkflowManifest:
     key_outputs: tuple[str, ...]
     fields: dict[str, FieldSpec]
     project_fields: dict[str, FieldSpec]
+    required_tools: tuple[str, ...] = ()
+    cli_help: str = ""
+    display_name_zh: str = ""
+    supported_backends: tuple[str, ...] = ("system", "conda", "container")
+
+    @property
+    def menu_key(self) -> str:
+        return f"menu_{self.workflow_id}"
+
+    @property
+    def example_config(self) -> str:
+        return f"examples/{self.workflow_id}.yml"
 
     @property
     def allowed_keys(self) -> set[str]:
@@ -67,10 +79,13 @@ def _project_fields(*specs: FieldSpec) -> dict[str, FieldSpec]:
 WORKFLOW_REGISTRY: dict[str, WorkflowManifest] = {
     "qc": WorkflowManifest(
         workflow_id="qc",
+        display_name_zh='质量控制',
+        required_tools=('fastqc', 'trimmomatic'),
+        cli_help='Run QC pipeline (FastQC + Trimmomatic)',
         display_name="Quality Control",
         supported_inputs=("single-end", "paired-end"),
         supported_profiles=("local", "workstation", "hpc-slurm"),
-        key_outputs=("trimmed", "trimmed_r1", "trimmed_r2", "fastqc_pre", "fastqc_post"),
+        key_outputs=("trimmed", "trimmed_r1", "trimmed_r2", "unpaired_r1", "unpaired_r2", "fastqc_pre", "fastqc_post"),
         fields=_fields(
             FieldSpec("input", "str"),
             FieldSpec("input_r1", "str"),
@@ -92,6 +107,9 @@ WORKFLOW_REGISTRY: dict[str, WorkflowManifest] = {
     ),
     "align": WorkflowManifest(
         workflow_id="align",
+        display_name_zh='序列比对',
+        required_tools=('bwa', 'samtools'),
+        cli_help='Run alignment pipeline (BWA + SAMtools)',
         display_name="Sequence Alignment",
         supported_inputs=("single-end", "paired-end"),
         supported_profiles=("local", "workstation", "hpc-slurm"),
@@ -118,6 +136,9 @@ WORKFLOW_REGISTRY: dict[str, WorkflowManifest] = {
     ),
     "longread": WorkflowManifest(
         workflow_id="longread",
+        display_name_zh='长读长质控与比对',
+        required_tools=('minimap2', 'samtools'),
+        cli_help='Run long-read QC and alignment (minimap2 + SAMtools)',
         display_name="Long-read Alignment",
         supported_inputs=("long-read-fasta", "long-read-fastq"),
         supported_profiles=("local", "workstation", "hpc-slurm"),
@@ -143,6 +164,9 @@ WORKFLOW_REGISTRY: dict[str, WorkflowManifest] = {
     ),
     "variant": WorkflowManifest(
         workflow_id="variant",
+        display_name_zh='变异检测',
+        required_tools=('samtools', 'bcftools'),
+        cli_help='Run variant calling from a sorted BAM (SAMtools + BCFtools)',
         display_name="Variant Calling",
         supported_inputs=("reference-fasta", "sorted-bam"),
         supported_profiles=("local", "workstation", "hpc-slurm"),
@@ -172,6 +196,9 @@ WORKFLOW_REGISTRY: dict[str, WorkflowManifest] = {
     ),
     "search": WorkflowManifest(
         workflow_id="search",
+        display_name_zh='BLAST 检索',
+        required_tools=('makeblastdb', 'blastn'),
+        cli_help='Run BLAST nucleotide search',
         display_name="BLAST Search",
         supported_inputs=("database-query",),
         supported_profiles=("local", "workstation", "hpc-slurm"),
@@ -198,6 +225,9 @@ WORKFLOW_REGISTRY: dict[str, WorkflowManifest] = {
     ),
     "rnaseq": WorkflowManifest(
         workflow_id="rnaseq",
+        display_name_zh='RNA-seq 转录本定量',
+        required_tools=('fastqc', 'salmon'),
+        cli_help='Run RNA-seq quantification (FastQC + Salmon)',
         display_name="RNA-seq Quantification",
         supported_inputs=("single-end", "paired-end"),
         supported_profiles=("local", "workstation", "hpc-slurm"),
@@ -279,3 +309,25 @@ def validate_field_value(spec: FieldSpec, value: Any, *, context: str) -> str | 
             return f"{context} '{spec.name}' must be a boolean"
 
     return None
+
+
+def workflow_catalog(workflow: str | None = None) -> list[dict[str, Any]]:
+    """Describe configured capabilities; this does not probe tool availability."""
+    manifests = [get_workflow_manifest(workflow)] if workflow else list_workflow_manifests()
+    return [
+        {
+            "workflow_id": manifest.workflow_id,
+            "display_name": manifest.display_name,
+            "display_name_zh": manifest.display_name_zh,
+            "supported_inputs": list(manifest.supported_inputs),
+            "key_outputs": list(manifest.key_outputs),
+            "required_tools": list(manifest.required_tools),
+            "supported_profiles": list(manifest.supported_profiles),
+            "supported_backends": list(manifest.supported_backends),
+            "cli_command": f"bioflow {manifest.workflow_id}",
+            "tui_menu_key": manifest.menu_key,
+            "example_config": manifest.example_config,
+            "project_supported": True,
+        }
+        for manifest in manifests
+    ]
