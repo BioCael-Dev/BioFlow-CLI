@@ -87,3 +87,25 @@ def test_step_resume_ready_rejects_execution_fingerprint_mismatch() -> None:
     )
 
     assert ok is False
+
+
+def test_resume_ignores_non_object_metadata(tmp_path: Path) -> None:
+    from bioflow.run_layout import read_metadata
+
+    layout = create_run_layout("qc", tmp_path / "reads.fastq")
+    layout.metadata_path.write_text("[]", encoding="utf-8")
+    assert read_metadata(layout) == {}
+
+
+def test_resume_rejects_malformed_step_status_and_fingerprint() -> None:
+    step = {"status": [], "environment_fingerprint": []}
+    metadata = {"steps": {"trim": step}}
+
+    def unexpected_validation() -> bool:
+        raise AssertionError("invalid checkpoints must be rejected before output validation")
+
+    for status in ([], "success"):
+        step["status"] = status
+        assert not step_resume_ready(
+            metadata, "trim", validator=unexpected_validation, current_execution={}
+        )

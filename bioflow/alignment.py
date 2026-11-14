@@ -320,16 +320,16 @@ def _is_nonempty_file(path: Path) -> bool:
     return path.is_file() and path.stat().st_size > 0
 
 
-def _flagstat_ready(path: Path) -> bool:
-    """flagstat 输出存在且可解析。"""
-    if not _is_nonempty_file(path):
-        return False
+def flagstat_output_ready(path: Path) -> bool:
+    """Check for the total and overall mapped lines in a saved flagstat."""
     try:
-        parse_flagstat(path.read_text(encoding="utf-8"))
-    except OSError:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
         return False
-    return True
-
+    return all(
+        re.search(rf"^\s*\d+\s*\+\s*\d+\s+{label}\b", text, re.MULTILINE)
+        for label in ("in total", "mapped")
+    )
 
 def _validate_alignment_inputs(
     reads: Path | None,
@@ -463,7 +463,7 @@ def parse_flagstat(text: str) -> dict[str, int | float]:
             stats["supplementary"] = count
         elif "duplicates" in rest:
             stats["duplicates"] = count
-        elif "mapped" in rest and "mate mapped" not in rest:
+        elif rest == "mapped" or rest.startswith("mapped "):
             stats["mapped"] = count
             # 提取映射率
             rate_match = re.search(r"\((\d+\.?\d*)\s*%", rest)
@@ -848,7 +848,7 @@ def run_alignment_pipeline(
     if resume and step_resume_ready(
         existing_metadata,
         ALIGN_STEP_FLAGSTAT,
-        validator=lambda: _flagstat_ready(flagstat_path),
+        validator=lambda: flagstat_output_ready(flagstat_path),
         required_outputs=("flagstat",),
         current_execution=execution_payload,
     ):

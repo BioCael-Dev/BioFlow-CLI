@@ -17,6 +17,7 @@ from bioflow import __version__
 from bioflow.registry import WORKFLOW_REGISTRY
 
 from bioflow.i18n import t
+from bioflow.run_layout import load_metadata_object
 
 console = Console()
 
@@ -84,15 +85,16 @@ def parse_metadata(run_dir: Path) -> RunInfo:
     if not meta_path.exists():
         raise FileNotFoundError(f"metadata.json not found in {run_dir}")
 
-    try:
-        data: dict[str, Any] = json.loads(meta_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid metadata.json in {run_dir}: {exc}") from exc
+    data = load_metadata_object(meta_path)
 
     required = ("workflow", "status", "started_at")
     for key in required:
         if key not in data:
             raise ValueError(f"metadata.json missing required key '{key}' in {run_dir}")
+
+    def object_field(key: str) -> dict[str, Any]:
+        value = data.get(key)
+        return value if isinstance(value, dict) else {}
 
     return RunInfo(
         run_dir=run_dir,
@@ -102,18 +104,18 @@ def parse_metadata(run_dir: Path) -> RunInfo:
         started_at=data.get("started_at", ""),
         completed_at=data.get("completed_at"),
         command=data.get("command", ""),
-        parameters=data.get("parameters", {}),
-        inputs=data.get("inputs", {}),
-        outputs=data.get("outputs", {}),
-        steps=data.get("steps", {}),
-        logs=data.get("logs", {}),
-        runtime=data.get("runtime", {}),
-        tool_versions=data.get("tool_versions", {}),
-        input_details=data.get("input_details", {}),
+        parameters=object_field("parameters"),
+        inputs=object_field("inputs"),
+        outputs=object_field("outputs"),
+        steps=object_field("steps"),
+        logs=object_field("logs"),
+        runtime=object_field("runtime"),
+        tool_versions=object_field("tool_versions"),
+        input_details=object_field("input_details"),
         failure_summary=data.get("failure_summary", ""),
-        failure_details=data.get("failure_details", {}),
-        stats=data.get("stats", {}) if isinstance(data.get("stats", {}), dict) else {},
-        summary=data.get("summary", {}) if isinstance(data.get("summary", {}), dict) else {},
+        failure_details=object_field("failure_details"),
+        stats=object_field("stats"),
+        summary=object_field("summary"),
     )
 
 
@@ -625,7 +627,7 @@ def _core_outputs(run: RunInfo) -> dict[str, Any]:
         return core
 
     if run.workflow == "align":
-        if "mapping_rate" in run.stats:
+        if isinstance(run.stats.get("mapping_rate"), (int, float)):
             core["mapping_rate"] = f"{float(run.stats['mapping_rate']):.2%}"
         if "mapped" in run.stats:
             core["mapped"] = run.stats["mapped"]

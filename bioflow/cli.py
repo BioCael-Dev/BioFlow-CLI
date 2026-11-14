@@ -33,7 +33,7 @@ from bioflow.preflight import PreflightError
 from bioflow.project_batch import run_project_batch
 from bioflow.report import collect_summary_data, generate_report, write_summary_json, write_summary_tsv
 from bioflow.rnaseq import run_rnaseq_pipeline
-from bioflow.run_layout import format_failure_diagnostics
+from bioflow.run_layout import format_failure_diagnostics, load_metadata_object
 from bioflow.search import run_blast_search
 from bioflow.variant import VARIANT_CALLERS, run_variant_pipeline
 
@@ -136,11 +136,19 @@ def _validate_single_or_paired_inputs(
 
 def _print_failure_diagnostics(metadata_path: Path, *, as_json: bool) -> None:
     """从 metadata.json 读取并打印统一失败诊断。"""
-    if as_json or not metadata_path.exists():
-        return
-    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    try:
+        payload = load_metadata_object(metadata_path)
+    except (OSError, ValueError):
+        payload = {}
     details = payload.get("failure_details")
-    if isinstance(details, dict):
+    if as_json:
+        fields: dict[str, Any] = {"metadata": str(metadata_path)}
+        if isinstance(details, dict) and details:
+            fields["failure_details"] = details
+        if isinstance(payload.get("failure_summary"), str) and payload["failure_summary"]:
+            fields["message"] = payload["failure_summary"]
+        print(_json_error_payload("runtime_error", **fields))
+    elif isinstance(details, dict) and details:
         console_err.print(format_failure_diagnostics(details), style="bold red")
 
 

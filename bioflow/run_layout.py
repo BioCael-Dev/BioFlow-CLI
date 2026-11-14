@@ -210,7 +210,7 @@ def metadata_supports_resume(metadata: dict[str, Any], step_name: str) -> bool:
     if not isinstance(steps, dict):
         return False
     step = steps.get(step_name)
-    return isinstance(step, dict) and step.get("status") in {STEP_SUCCESS, STEP_SKIPPED}
+    return isinstance(step, dict) and step.get("status") in (STEP_SUCCESS, STEP_SKIPPED)
 
 
 def step_resume_ready(
@@ -235,7 +235,7 @@ def step_resume_ready(
             if isinstance(metadata_execution, dict)
             else None
         )
-        if step_fingerprint not in {current_fingerprint, None}:
+        if step_fingerprint not in (current_fingerprint, None):
             return False
         if step_fingerprint is None and fallback_fingerprint not in {None, current_fingerprint}:
             return False
@@ -306,13 +306,22 @@ def append_log(path: Path | None, text: str) -> None:
             handle.write("\n")
 
 
-def read_metadata(layout: RunLayout) -> dict[str, Any]:
-    """读取 metadata.json，不存在或损坏时返回空字典。"""
-    if not layout.metadata_path.exists():
-        return {}
+def load_metadata_object(path: Path) -> dict[str, Any]:
+    """Read a run metadata object and identify malformed files by path."""
     try:
-        return json.loads(layout.metadata_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid metadata.json in {path.parent}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"Invalid metadata.json in {path.parent}: expected a JSON object")
+    return data
+
+
+def read_metadata(layout: RunLayout) -> dict[str, Any]:
+    """Read resume metadata, treating missing or unusable files as empty."""
+    try:
+        return load_metadata_object(layout.metadata_path)
+    except (OSError, ValueError):
         return {}
 
 

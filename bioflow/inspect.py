@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
-from bioflow.run_layout import read_log_tail
+from bioflow.run_layout import load_metadata_object, read_log_tail
 
 
 def _load_metadata(run_dir: Path) -> dict[str, Any]:
@@ -14,10 +13,7 @@ def _load_metadata(run_dir: Path) -> dict[str, Any]:
     meta_path = run_dir / "metadata.json"
     if not meta_path.exists():
         raise FileNotFoundError(f"metadata.json not found in {run_dir}")
-    try:
-        return json.loads(meta_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid metadata.json in {run_dir}: {exc}") from exc
+    return load_metadata_object(meta_path)
 
 
 def _path_status(path_value: str) -> dict[str, Any]:

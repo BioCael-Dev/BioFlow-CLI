@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from bioflow.alignment import parse_flagstat
+from bioflow.alignment import flagstat_output_ready, parse_flagstat
 from bioflow.execution import (
     ResolvedCommand,
     resolve_command,
@@ -212,16 +212,6 @@ def _is_nonempty_file(path: Path) -> bool:
 def _qc_summary_ready(path: Path) -> bool:
     payload = _read_json_mapping(path)
     return all(key in payload for key in ("input_format", "read_count", "total_bases", "n50"))
-
-
-def _flagstat_ready(path: Path) -> bool:
-    if not _is_nonempty_file(path):
-        return False
-    try:
-        parse_flagstat(path.read_text(encoding="utf-8"))
-    except OSError:
-        return False
-    return True
 
 
 def _summary_ready(path: Path) -> bool:
@@ -698,7 +688,7 @@ def run_longread_pipeline(
     if resume and resume_context_matches and map_reused and step_resume_ready(
         existing_metadata,
         LONGREAD_STEP_FLAGSTAT,
-        validator=lambda: _flagstat_ready(flagstat_path),
+        validator=lambda: flagstat_output_ready(flagstat_path),
         required_outputs=("flagstat",),
         current_execution=execution_payload,
     ):

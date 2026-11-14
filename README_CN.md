@@ -410,6 +410,19 @@ bioflow --json batch -i ./data -o ./formatted
 | Linux | `~/.config/bioflow/config.json`（或 `$XDG_CONFIG_HOME/bioflow/`） |
 | Windows | `%APPDATA%\bioflow\config.json` |
 
+## 输出数据契约
+
+| 输出 | 版本与兼容性 |
+| --- | --- |
+| 运行目录的 `metadata.json` | `metadata_schema_version` 标识文件格式（`bioflow.metadata.v1`）。`version` 记录生成该运行结果的 BioFlow-CLI 版本。旧 metadata 可以缺少 schema 标识和可选区块。 |
+| 报告导出 | `summary.json` 使用 `bioflow.summary.v1`。TSV 使用同一组运行指标，列顺序固定。TSV 单元格中的对象和数组是 JSON 字符串。缺失的标量在 JSON 中为 `null`、在 TSV 中留空，实测零值为 `0`。 |
+| 项目导出 | `project_summary.json` 包含各工作流汇总。变异比较 JSON 使用 `bioflow.variant-summary.v1`，并提供对应的 TSV。既有 JSON 字段与 TSV 列可继续读取。 |
+
+- 机器输出中的比对率和质量比例为 0 到 1 的数值，报告可将其显示为百分比。读长和 N50 的单位为碱基。
+- RNA-seq 矩阵按转录本排列，列按项目顺序排列纳入的样本。counts 取 Salmon 的 `NumReads` 估计值，可以有小数。TPM 取 Salmon 的 `TPM`。已纳入样本缺少某个转录本时按零填充。失败、定量结果不可用和未运行的样本在诊断中列出。解释矩阵时应保留运行 metadata 中的样本 ID 和转录本参考或索引输入。
+- 变异统计以 VCF 记录为单位。每条记录计入一个分类，非符号 ALT 只要存在与参考不同的长度便计入 INDEL。符号 ALT 和跨位点缺失计入 other。多等位统计与这些分类重叠。PASS 统计包含 FILTER 为 `PASS` 和 `.` 的记录。平均 QUAL 纳入有数值 QUAL 的记录，包括已过滤的记录。无数值 QUAL 时 JSON 为 `null`，TSV 留空。项目比较保留样本 ID、参考路径和已记录的参考 SHA256。
+- CLI 退出码 `0` 表示命令完成，`1` 表示运行失败，`2` 表示输入或参数错误，`3` 表示缺少依赖。工作流启动后失败时，`--json` 返回包含预期 metadata 路径和可用诊断信息的错误对象。`inspect` 返回 `0` 表示成功读取目录，工作流结果应查看返回的运行状态。配置为出错后继续的项目会在结果中列出失败样本。
+
 ## 开发
 
 ```bash
@@ -420,7 +433,7 @@ pip install -e .[dev]
 
 ## 项目状态
 
-当前开发版本：**v1.1.2**
+当前开发版本：**v1.1.3**
 
 ## 许可证
 

@@ -456,6 +456,9 @@ def test_qc_resume_recomputes_invalid_trimmed_output(tmp_path: Path, monkeypatch
     (run_root / "results" / "fastqc_pre").mkdir(parents=True, exist_ok=True)
     (run_root / "results" / "fastqc_pre" / "reads_fastqc.html").write_text("ok", encoding="utf-8")
     trimmed = run_root / "results" / "reads.trimmed.fastq"
+    stale_report = run_root / "results" / "fastqc_post" / "reads.trimmed_fastqc.html"
+    stale_report.parent.mkdir(parents=True)
+    stale_report.write_text("stale", encoding="utf-8")
     trimmed.parent.mkdir(parents=True, exist_ok=True)
     trimmed.write_text("", encoding="utf-8")
     (run_root / "metadata.json").write_text(
@@ -464,6 +467,7 @@ def test_qc_resume_recomputes_invalid_trimmed_output(tmp_path: Path, monkeypatch
                 "steps": {
                     "fastqc_pre": {"status": "success", "outputs": {"dir": str(run_root / "results" / "fastqc_pre")}},
                     "trimmomatic": {"status": "success", "outputs": {"trimmed": str(trimmed)}},
+                    "fastqc_post": {"status": "success", "outputs": {"dir": str(stale_report.parent)}},
                 }
             }
         ),
@@ -489,6 +493,7 @@ def test_qc_resume_recomputes_invalid_trimmed_output(tmp_path: Path, monkeypatch
     assert pipeline.run_qc_pipeline(reads, outdir=run_root, resume=True, skip_preflight=True) is True
     assert calls["trim"] == 1
     assert calls["post"] == 1
+    assert stale_report.read_text(encoding="utf-8") == "ok"
 
 
 def test_qc_resume_recomputes_invalid_paired_outputs(tmp_path: Path, monkeypatch) -> None:
@@ -615,7 +620,7 @@ def test_alignment_resume_recomputes_invalid_flagstat(tmp_path: Path, monkeypatc
     bam.parent.mkdir(parents=True, exist_ok=True)
     bam.write_text("bam", encoding="utf-8")
     bam.with_suffix(".bam.bai").write_text("bai", encoding="utf-8")
-    (run_root / "results" / "reads.sorted.flagstat.txt").write_text("", encoding="utf-8")
+    (run_root / "results" / "reads.sorted.flagstat.txt").write_text("truncated tool output", encoding="utf-8")
     (run_root / "metadata.json").write_text(
         json.dumps(
             {
@@ -776,7 +781,7 @@ def test_cmd_search_json_reports_resume_used(tmp_path: Path, monkeypatch, capsys
     assert payload["resume_used"] is True
 
 
-def test_cmd_search_failure_prints_diagnostics(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_cmd_search_failure_reports_text_and_json(tmp_path: Path, monkeypatch, capsys) -> None:
     db = tmp_path / "ref.fa"
     query = tmp_path / "query.fa"
     db.write_text(">ref\nACGT\n", encoding="utf-8")
@@ -799,24 +804,36 @@ def test_cmd_search_failure_prints_diagnostics(tmp_path: Path, monkeypatch, caps
     )
     monkeypatch.setattr(cli, "run_blast_search", lambda *args, **kwargs: None)
 
-    exit_code = cli.cmd_search(
-        Namespace(
-            quiet=False,
-            json=False,
-            config=None,
-            db=str(db),
-            query=str(query),
-            output=None,
-            outdir=str(run_root),
-            evalue=10.0,
-            max_target_seqs=10,
-            top=5,
-            resume=False,
-        )
+    args = Namespace(
+        quiet=False,
+        json=False,
+        config=None,
+        db=str(db),
+        query=str(query),
+        output=None,
+        outdir=str(run_root),
+        evalue=10.0,
+        max_target_seqs=10,
+        top=5,
+        resume=False,
     )
 
-    assert exit_code == cli.EXIT_RUNTIME_ERROR
+    assert cli.cmd_search(args) == cli.EXIT_RUNTIME_ERROR
     assert "Failed Step: blastn" in capsys.readouterr().err
+
+    args.json = True
+    assert cli.cmd_search(args) == cli.EXIT_RUNTIME_ERROR
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"] == "runtime_error"
+    assert payload["metadata"] == str(run_root / "metadata.json")
+    assert payload["failure_details"]["failed_step"] == "blastn"
+
+    (run_root / "metadata.json").write_text("[]", encoding="utf-8")
+    assert cli.cmd_search(args) == cli.EXIT_RUNTIME_ERROR
+    assert json.loads(capsys.readouterr().out) == {
+        "error": "runtime_error",
+        "metadata": str(run_root / "metadata.json"),
+    }
 
 
 def test_cmd_qc_rejects_mixed_single_and_paired_inputs(tmp_path: Path, capsys) -> None:
@@ -998,3 +1015,16 @@ def test_report_renders_nested_paired_metadata(tmp_path: Path) -> None:
     assert "input_r1" in html
     assert "sha256" in html
     assert "reads_1.paired.fastq" in html
+
+
+def test_flagstat_overall_mapping_ignores_related_count_lines() -> None:
+    stats = alignment.parse_flagstat(
+        "2 + 0 in total (QC-passed reads + QC-failed reads)\n"
+        "1 + 0 mapped (50.00% : N/A)\n"
+        "1 + 0 primary mapped (50.00% : N/A)\n"
+        "0 + 0 with mate mapped to a different chr\n"
+        "0 + 0 unmapped\n"
+    )
+    assert (stats["total"], stats["mapped"], stats["unmapped"], stats["mapping_rate"]) == (
+        2, 1, 1, 0.5,
+    )

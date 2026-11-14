@@ -105,3 +105,13 @@ def test_inspect_show_log_tail_reads_stderr(tmp_path: Path) -> None:
 
     payload = inspect_run(run_root, show_log="tail")
     assert payload["stderr_tail"] == "line1\nline2\nline3"
+
+
+def test_cmd_inspect_reports_malformed_metadata(tmp_path: Path, capsys) -> None:
+    (tmp_path / "metadata.json").write_text("[]", encoding="utf-8")
+    args = Namespace(input=str(tmp_path), json=True, show_log=None)
+    assert cli.cmd_inspect(args) == cli.EXIT_RUNTIME_ERROR
+    result = json.loads(capsys.readouterr().out)
+    assert result["error"] == "runtime_error"
+    assert str(tmp_path) in result["message"]
+    assert "expected a JSON object" in result["message"]

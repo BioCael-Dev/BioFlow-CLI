@@ -308,7 +308,7 @@ def _read_salmon_quant(quant_path: Path) -> dict[str, tuple[float, float]]:
         if reader.fieldnames is None or not required.issubset(reader.fieldnames):
             raise ValueError("invalid Salmon quant.sf header")
         for row in reader:
-            transcript_id = str(row["Name"]).strip()
+            transcript_id = (row["Name"] or "").strip()
             if not transcript_id:
                 raise ValueError("Salmon quant.sf contains an empty transcript id")
             if transcript_id in values:

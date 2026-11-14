@@ -377,6 +377,19 @@ Language config is saved per OS:
 - Linux: `~/.config/bioflow/config.json` (or `$XDG_CONFIG_HOME/bioflow/`)
 - Windows: `%APPDATA%\bioflow\config.json`
 
+## Output contracts
+
+| Output | Version and compatibility |
+| --- | --- |
+| Run `metadata.json` | `metadata_schema_version` identifies the file format (`bioflow.metadata.v1`). `version` records the BioFlow-CLI version that produced the run. Older metadata can omit the schema marker and optional sections. |
+| Report exports | `summary.json` uses `bioflow.summary.v1`. The TSV uses the same run metrics and a fixed column order. Objects and arrays in TSV cells are JSON strings. An unavailable scalar is JSON `null` or a blank TSV cell, and a measured zero is `0`. |
+| Project exports | `project_summary.json` contains workflow-specific summaries. Variant comparison JSON uses `bioflow.variant-summary.v1`, with a matching TSV projection. Existing JSON keys and TSV columns remain readable. |
+
+- Mapping rates and quality ratios are numeric fractions from 0 to 1 in machine output. Reports can display those values as percentages. Read lengths and N50 are in bases.
+- RNA-seq matrices contain transcript rows and included samples in project order. The counts matrix uses Salmon `NumReads`, an estimate that can be fractional. The TPM matrix uses Salmon `TPM`. A transcript missing from an included sample is filled with zero. Failed samples, samples with unusable quantification, and samples that did not run appear in diagnostics instead of acquiring matrix columns. Keep the sample IDs and transcriptome or index inputs from the run metadata when interpreting the matrices.
+- Variant statistics count VCF records. Each record contributes to one class; mixed-length non-symbolic ALT values count as INDEL. Symbolic ALT and spanning deletions count as other. Multiallelic counts overlap the classes. The PASS bucket includes FILTER `PASS` and `.`. Mean QUAL averages records with a numeric QUAL, including filtered records. If none report QUAL, the value is `null` in JSON and blank in TSV. Project comparisons retain the sample ID, reference path and recorded reference SHA256 when available.
+- CLI exit codes are `0` for completed commands, `1` for runtime failure, `2` for input or argument errors, and `3` for a missing dependency. When a workflow fails after starting, `--json` emits an error object with the expected metadata path and any available failure details. An `inspect` exit code of `0` means the directory was read successfully. Check the returned run status for the workflow outcome. Projects configured to continue after error report failed samples in their result.
+
 ## Development
 
 ```bash
@@ -387,7 +400,7 @@ pip install -e .[dev]
 
 ## Project Status
 
-Current development version: **v1.1.2**
+Current development version: **v1.1.3**
 
 Release history and notes: [GitHub Releases](https://github.com/BioCael-Dev/BioFlow-CLI/releases)
 

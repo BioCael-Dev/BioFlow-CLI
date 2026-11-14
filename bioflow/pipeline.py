@@ -626,7 +626,8 @@ def run_qc_pipeline(
 
     # 5. 步骤 3：修剪后 FastQC
     console.print(t("qc_step_label", step="3/3", name="FastQC"), style="bold blue")
-    if resume and step_resume_ready(
+    trim_reused = steps[QC_STEP_TRIM].get("status") == STEP_SKIPPED
+    if resume and trim_reused and step_resume_ready(
         existing_metadata,
         QC_STEP_FASTQC_POST,
         validator=(

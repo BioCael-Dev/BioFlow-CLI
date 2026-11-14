@@ -280,3 +280,19 @@ def test_generate_report_renders_multiqc_style_sections(tmp_path: Path) -> None:
     assert 'data-run-list' in html
     assert 'data-sample="sample-align"' in html
     assert 'data-search="' in html
+
+
+def test_report_preserves_unknown_mapping_rate_in_legacy_metadata(tmp_path: Path) -> None:
+    _write_metadata(tmp_path, {
+        "workflow": "align",
+        "status": "success",
+        "started_at": "2026-05-15T00:00:00Z",
+        "stats": {"mapping_rate": None, "mapped": 0},
+        "outputs": None,
+        "logs": None,
+    })
+    summary = report.collect_summary_data(tmp_path)
+    run = summary["runs"][0]
+    assert run["metrics"]["mapping_rate"] is None
+    assert run["metrics"]["mapped"] == 0
+    assert report.generate_report(tmp_path, tmp_path / "report.html").is_file()
